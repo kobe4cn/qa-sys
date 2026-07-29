@@ -56,3 +56,41 @@ impl LatestAnswerResponse {
         }
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::{AnswerEntity, LatestAnswerResponse};
+
+    #[test]
+    fn test_should_calculate_empty_pagination() {
+        let response = LatestAnswerResponse::new(Vec::new(), 0, 10, 1);
+
+        assert_eq!(response.total_page, 0);
+        assert!(response.is_end);
+    }
+
+    #[test]
+    fn test_should_calculate_exact_and_partial_pages() {
+        let exact = LatestAnswerResponse::new(Vec::new(), 20, 10, 1);
+        assert_eq!(exact.total_page, 2);
+        assert!(!exact.is_end);
+
+        let partial = LatestAnswerResponse::new(Vec::new(), 21, 10, 1);
+        assert_eq!(partial.total_page, 3);
+        assert!(!partial.is_end);
+    }
+
+    #[test]
+    fn test_should_mark_last_and_later_pages_as_end() {
+        let last_page = LatestAnswerResponse::new(vec![AnswerEntity::default()], 20, 10, 2);
+        assert!(last_page.is_end);
+
+        let later_page = LatestAnswerResponse::new(Vec::new(), 20, 10, 3);
+        assert!(later_page.is_end);
+    }
+
+    #[test]
+    fn test_should_reject_zero_page_size() {
+        assert!(LatestAnswerResponse::try_new(Vec::new(), 10, 0, 1).is_err());
+    }
+}

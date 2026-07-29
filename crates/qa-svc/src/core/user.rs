@@ -1,8 +1,9 @@
-use crate::{UserEntity, UserRepository, UserSessionEntity};
 use anyhow::{Result, anyhow};
 use qa_sys_core::RedisPool;
 use redis::Commands;
 use uuid::Uuid;
+
+use crate::{UserEntity, UserRepository, UserSessionEntity};
 
 pub struct UserRepositoryImpl {
     db: sqlx::PgPool,
@@ -19,6 +20,22 @@ impl UserRepositoryImpl {
             .map(|i| format!("${i}"))
             .collect::<Vec<String>>()
             .join(",")
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::UserRepositoryImpl;
+
+    #[test]
+    fn test_should_generate_empty_placeholder_list_for_zero_values() {
+        assert_eq!(UserRepositoryImpl::gen_in_placeholder(0), "");
+    }
+
+    #[test]
+    fn test_should_generate_contiguous_postgres_placeholders() {
+        assert_eq!(UserRepositoryImpl::gen_in_placeholder(1), "$1");
+        assert_eq!(UserRepositoryImpl::gen_in_placeholder(4), "$1,$2,$3,$4",);
     }
 }
 
