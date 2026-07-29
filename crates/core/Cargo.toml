@@ -1,0 +1,31 @@
+[package]
+name = "qa-sys-core"
+description = """
+
+"""
+categories = ["development-tools"]
+keywords = []
+version.workspace = true
+authors.workspace = true
+edition.workspace = true
+license.workspace = true
+documentation.workspace = true
+repository.workspace = true
+homepage.workspace = true
+
+[dependencies]
+anyhow.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+serde_yaml.workspace = true
+thiserror.workspace = true
+tokio.workspace = true
+
+rust-crypto.workspace = true
+base64.workspace = true
+autometrics.workspace = true
+axum.workspace = true
+sqlx.workspace = true
+redis.workspace = true
+r2d2.workspace = true
+pulsar.workspace = true

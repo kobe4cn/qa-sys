@@ -1,0 +1,201 @@
+syntax = "proto3";
+package pb;
+
+message UserLoginRequest{
+    string username = 1;
+    string password = 2;
+}
+
+message UserLoginResponse{
+    string token = 1;
+}
+
+message UserLogoutRequest{
+        string token = 1;
+}
+
+message UserLogoutResponse{
+    int64 state = 1;
+}
+
+message UserRegisterRequest{
+    string username = 1;
+    string password = 2;
+    string email = 3;
+    string phone = 4;
+}
+
+
+message UserRegisterResponse{
+    int64 state = 1;
+}
+
+message VerifyTokenRequest{
+    string token = 1;
+    string request_id=2;
+}
+
+message VerifyTokenResponse{
+    int64 state=1;
+    string reason=2;
+    string username=3;
+}
+
+message AddQuestionRequest{
+    string title=1;
+    string content=2;
+    string create_by=3;
+}
+
+message AddQuestionResponse{
+    
+    uint64 id=2;
+}
+
+message DeleteQuestionRequest{
+    uint64 id=1;
+    string username=2;
+}
+
+message DeleteQuestionResponse{
+    int64 state=1;
+}
+
+message UpdateQuestionRequest{
+    uint64 id=1;
+    string title=2;
+    string content=3;
+    string update_by=4;
+}
+
+message UpdateQuestionResponse{
+    int64 state=1;
+}
+
+message AnswerEntity{
+    uint64 id=1;
+    uint64 question_id=2;
+    string content=3;
+    string create_by=4;
+    uint64 agree_count=5;
+    bool has_aggreed=6;
+}
+message AddAnswerRequest{
+    AnswerEntity answer=1;
+
+}
+
+message AddAnswerResponse{
+    uint64 id=1;
+}
+
+message DeleteAnswerRequest{
+    uint64 id=1;
+    string username=2;
+}
+
+message DeleteAnswerResponse{
+    int64 state=1;
+}
+
+message UpdateAnswerRequest{
+    uint64 id=1;
+    string content=2;
+    string username=3;
+}
+
+message UpdateAnswerResponse{
+    int64 state=1;
+}
+
+message AgreeAnswerRequest{
+    uint64 id=1;
+    string create_by=2;
+    string action=3;
+}
+
+
+
+message AgreeAnswerResponse{
+    int64 state=1;
+    uint64 agree_count=2;
+    string reason=3;
+}
+
+message QuestionDetailRequest{
+    uint64 id=1;
+    string username=2;
+}
+message QuestionEntity{
+    uint64 id=1;
+    string title=2;
+    string content=3;
+    string create_by=4;
+    uint64 read_count=5;
+    uint64 reply_count=6;
+}
+message QuestionDetailResponse{
+    QuestionEntity question=1;
+    
+}
+
+
+
+
+
+message LatestQuestionRequest{
+    uint64 last_id=2;
+    uint64 limit=3;
+}
+
+message LatestQuestionResponse{
+    repeated QuestionEntity questions=1; 
+    uint64 last_id=2;
+    bool is_end=3;
+}
+
+message AnswerListRequest{
+    uint64 question_id=1;
+    uint64 page=2;
+    uint64 limit=3;
+    string username=4;
+}
+
+message AnswerListResponse{
+    repeated AnswerEntity answers=1;
+    uint64 total=2;
+    uint64 total_page=3;
+    uint64 page_size=4;
+    uint64 current_page=5;
+    bool is_end=6;
+}
+
+message AnswerDetailRequest{
+    uint64 id=1;
+    string username=2;
+}
+
+message AnswerDetailResponse{
+    AnswerEntity answer=1;
+}
+
+
+service QAService{
+    rpc UserLogin(UserLoginRequest) returns (UserLoginResponse);
+    rpc UserLogout(UserLogoutRequest) returns (UserLogoutResponse);
+    rpc UserRegister(UserRegisterRequest) returns (UserRegisterResponse);
+    rpc VerifyToken(VerifyTokenRequest) returns (VerifyTokenResponse);
+    rpc AddQuestion(AddQuestionRequest) returns (AddQuestionResponse);
+    rpc DeleteQuestion(DeleteQuestionRequest) returns (DeleteQuestionResponse);
+    rpc UpdateQuestion(UpdateQuestionRequest) returns (UpdateQuestionResponse);
+    rpc AddAnswer(AddAnswerRequest) returns (AddAnswerResponse);
+    rpc DeleteAnswer(DeleteAnswerRequest) returns (DeleteAnswerResponse);
+    rpc UpdateAnswer(UpdateAnswerRequest) returns (UpdateAnswerResponse);
+    rpc AgreeAnswer(AgreeAnswerRequest) returns (AgreeAnswerResponse);
+    rpc QuestionDetail(QuestionDetailRequest) returns (QuestionDetailResponse);
+    rpc LatestQuestion(LatestQuestionRequest) returns (LatestQuestionResponse);
+    rpc AnswerList(AnswerListRequest) returns (AnswerListResponse);
+    rpc AnswerDetail(AnswerDetailRequest) returns (AnswerDetailResponse);
+    rpc AnswerAgree(AgreeAnswerRequest) returns (AgreeAnswerResponse);
+    
+}
