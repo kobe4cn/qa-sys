@@ -48,7 +48,7 @@ define run_postgres
 @$(1) run -d --name "$(POSTGRES_CONTAINER)" \
 	-p "$(POSTGRES_PORT):5432" \
 	-e POSTGRES_USER="$(POSTGRES_USER)" \
-	-e POSTGRES_PASSWORD="$(POSTGRES_PASSWORD)" \
+	-e POSTGRES_PASSWORD \
 	-e POSTGRES_DB="$(POSTGRES_DATABASE)" \
 	-v "$(POSTGRES_VOLUME):/var/lib/postgresql" \
 	"$(POSTGRES_IMAGE)"
@@ -57,10 +57,12 @@ endef
 define run_redis
 @$(1) run -d --name "$(REDIS_CONTAINER)" \
 	$(2) \
+	--entrypoint sh \
+	-e REDIS_PASSWORD \
 	-p "$(REDIS_PORT):6379" \
 	-v "$(REDIS_VOLUME):/data" \
 	"$(REDIS_IMAGE)" \
-	$(3) --appendonly yes --requirepass "$(REDIS_PASSWORD)"
+	-c 'umask 077; printf "appendonly yes\nrequirepass %s\n" "$$REDIS_PASSWORD" > /tmp/redis.conf; exec redis-server /tmp/redis.conf'
 endef
 
 define run_pulsar
@@ -129,11 +131,11 @@ done
 endef
 
 check-local-credentials:
-	@test -n "$(POSTGRES_PASSWORD)" || { \
+	@test -n "$$POSTGRES_PASSWORD" || { \
 		echo "POSTGRES_PASSWORD must be set in the environment"; \
 		exit 1; \
 	}
-	@test -n "$(REDIS_PASSWORD)" || { \
+	@test -n "$$REDIS_PASSWORD" || { \
 		echo "REDIS_PASSWORD must be set in the environment"; \
 		exit 1; \
 	}
@@ -152,12 +154,12 @@ deps-up-apple: check-local-credentials check-apple-container
 	$(call ensure_volume,container,$(PULSAR_DATA_VOLUME))
 	$(call ensure_volume,container,$(PULSAR_LOG_VOLUME))
 	$(call run_postgres,container)
-	$(call run_redis,container,--user 0:0 --entrypoint redis-server,)
+	$(call run_redis,container,--user 0:0)
 	$(call run_pulsar,container,--memory 2g)
 
 deps-status-apple: check-local-credentials check-apple-container
 	$(call wait_for_dependency,container,$(POSTGRES_CONTAINER),pg_isready -U "$(POSTGRES_USER)" -d "$(POSTGRES_DATABASE)",PostgreSQL)
-	$(call wait_for_dependency,container,$(REDIS_CONTAINER),redis-cli -a "$(REDIS_PASSWORD)" --no-auth-warning ping,Redis)
+	$(call wait_for_dependency,container,$(REDIS_CONTAINER),sh -c 'REDISCLI_AUTH="$$REDIS_PASSWORD" redis-cli ping',Redis)
 	$(call wait_for_dependency,container,$(PULSAR_CONTAINER),bin/pulsar-admin clusters list,Pulsar)
 
 db-migrate-apple: deps-status-apple
@@ -184,12 +186,12 @@ deps-up-podman: check-local-credentials check-podman
 	$(call ensure_volume,podman,$(PULSAR_DATA_VOLUME))
 	$(call ensure_volume,podman,$(PULSAR_LOG_VOLUME))
 	$(call run_postgres,podman)
-	$(call run_redis,podman,,redis-server)
+	$(call run_redis,podman,)
 	$(call run_pulsar,podman,)
 
 deps-status-podman: check-local-credentials check-podman
 	$(call wait_for_dependency,podman,$(POSTGRES_CONTAINER),pg_isready -U "$(POSTGRES_USER)" -d "$(POSTGRES_DATABASE)",PostgreSQL)
-	$(call wait_for_dependency,podman,$(REDIS_CONTAINER),redis-cli -a "$(REDIS_PASSWORD)" --no-auth-warning ping,Redis)
+	$(call wait_for_dependency,podman,$(REDIS_CONTAINER),sh -c 'REDISCLI_AUTH="$$REDIS_PASSWORD" redis-cli ping',Redis)
 	$(call wait_for_dependency,podman,$(PULSAR_CONTAINER),bin/pulsar-admin clusters list,Pulsar)
 
 db-migrate-podman: deps-status-podman
