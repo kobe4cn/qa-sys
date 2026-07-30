@@ -74,6 +74,52 @@ Apple `container` 只支持 Apple Silicon。安装方法和受支持的 macOS �
 container system start
 ```
 
+如需构建项目镜像，使用 Makefile 提供的兼容入口：
+
+```bash
+make images-build-apple
+```
+
+该命令依次生成 `qa-project-dev:v1.0`、`qa-svc:latest` 和
+`qa-gateway:latest`。Apple `container` 1.1.0 在部分目录（包括当前 SynologyDrive
+工作区）递归归档 `COPY . .` 构建上下文时可能遗漏嵌套文件或报告
+`invalid tar header`。Makefile 会创建不含 `.env`、`.git`、`target` 和 macOS
+AppleDouble 元数据的临时单文件上下文，构建结束后自动删除；标准 Dockerfile
+仍可直接供 Podman 或 Docker 使用。
+
+也可以只构建所需镜像：
+
+```bash
+make image-build-dev-apple
+make image-build-qa-svc-apple
+make image-build-gateway-apple
+```
+
+镜像标签、目标平台和构建器内存可覆盖：
+
+```bash
+make images-build-apple \
+  APPLE_BUILD_PLATFORM=linux/arm64 \
+  DEV_IMAGE=qa-project-dev:local \
+  QA_SVC_IMAGE=qa-svc:local \
+  GATEWAY_IMAGE=qa-gateway:local \
+  APPLE_BUILD_MEMORY=8g
+```
+
+`APPLE_BUILD_PLATFORM` 默认为 `linux/arm64`。构建 AMD64 / x86_64 镜像时，应同时使用
+架构专用标签，避免覆盖本地 ARM64 镜像：
+
+```bash
+make images-build-apple \
+  APPLE_BUILD_PLATFORM=linux/amd64 \
+  DEV_IMAGE=qa-project-dev:v1.0-amd64 \
+  QA_SVC_IMAGE=qa-svc:amd64 \
+  GATEWAY_IMAGE=qa-gateway:amd64
+```
+
+每次调用生成一个架构的镜像，不会自动创建同时包含 ARM64 和 AMD64 的多架构
+manifest。
+
 然后启动依赖并执行数据库迁移：
 
 ```bash
@@ -197,6 +243,10 @@ curl --fail-with-body \
 
 | 目标 | 作用 |
 | --- | --- |
+| `images-build-apple` | 使用 Apple `container` 兼容上下文构建全部三个项目镜像 |
+| `image-build-dev-apple` | 构建包含 Rust、Go、Node 和 Python 的开发镜像 |
+| `image-build-qa-svc-apple` | 构建开发镜像和 `qa-svc` 运行镜像 |
+| `image-build-gateway-apple` | 构建开发镜像和 Gateway 运行镜像 |
 | `deps-up-apple` | 使用 Apple `container` 创建或重建本项目依赖，保留已有命名卷 |
 | `deps-status-apple` | 等待 Apple `container` 中的三个依赖就绪 |
 | `db-migrate-apple` | 检查迁移状态并通过 Apple `container` 执行迁移 |

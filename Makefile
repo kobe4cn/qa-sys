@@ -3,6 +3,12 @@ MIGRATION_PATH ?= $(CURDIR)/migrations/20260725064428_db.sql
 
 DEV_PREFIX ?= qa-sys
 
+DEV_IMAGE ?= qa-project-dev:v1.0
+QA_SVC_IMAGE ?= qa-svc:latest
+GATEWAY_IMAGE ?= qa-gateway:latest
+APPLE_BUILD_MEMORY ?= 6g
+APPLE_BUILD_PLATFORM ?= linux/arm64
+
 POSTGRES_IMAGE ?= docker.io/library/postgres:18.4
 REDIS_IMAGE ?= docker.io/library/redis:8.8.1-alpine
 PULSAR_IMAGE ?= docker.io/apachepulsar/pulsar:4.2.3
@@ -146,6 +152,58 @@ case "$$value" in \
 esac
 endef
 
+define build_apple_application_images
+@set -eu; \
+apple_build_context=$$(mktemp -d /tmp/qa-sys-apple-build.XXXXXX); \
+trap 'rm -rf "$$apple_build_context"' EXIT HUP INT TERM; \
+COPYFILE_DISABLE=1 tar --no-xattrs \
+	--exclude='./.git' \
+	--exclude='*/.git' \
+	--exclude='./.gitignore' \
+	--exclude='./.vscode' \
+	--exclude='./.idea' \
+	--exclude='./.DS_Store' \
+	--exclude='./.env' \
+	--exclude='./.env.*' \
+	--exclude='*/.env' \
+	--exclude='*/.env.*' \
+	--exclude='./target' \
+	--exclude='*/target' \
+	--exclude='._*' \
+	--exclude='*/._*' \
+	-cf "$$apple_build_context/source.tar" .; \
+build_apple_image() { \
+	source_dockerfile="$$1"; \
+	image_tag="$$2"; \
+	awk ' \
+		BEGIN { replacements = 0 } \
+		$$0 == "COPY . ." { \
+			print "COPY source.tar /tmp/source.tar"; \
+			print "RUN tar -xf /tmp/source.tar -C /app && rm /tmp/source.tar"; \
+			replacements += 1; \
+			next; \
+		} \
+		{ print } \
+		END { if (replacements != 1) exit 1 } \
+	' "$$source_dockerfile" > "$$apple_build_context/Dockerfile" || { \
+		echo "$$source_dockerfile must contain exactly one literal COPY . . instruction"; \
+		exit 1; \
+	}; \
+	container build \
+		--file "$$apple_build_context/Dockerfile" \
+		--tag "$$image_tag" \
+		--build-arg "DEV_IMAGE=$(DEV_IMAGE)" \
+		--platform "$(APPLE_BUILD_PLATFORM)" \
+		--memory "$(APPLE_BUILD_MEMORY)" \
+		--progress plain \
+		"$$apple_build_context"; \
+}; \
+build_apple_image "$(1)" "$(2)"; \
+if [ -n "$(3)" ]; then \
+	build_apple_image "$(3)" "$(4)"; \
+fi
+endef
+
 check-local-credentials:
 	@test -n "$$POSTGRES_PASSWORD" || { \
 		echo "POSTGRES_PASSWORD must be set in the environment"; \
@@ -164,6 +222,24 @@ check-apple-container:
 		exit 1; \
 	}
 	@container system status >/dev/null
+
+image-build-dev-apple: check-apple-container
+	@container build \
+		--file dockfile/Dockerfile-dev \
+		--tag "$(DEV_IMAGE)" \
+		--platform "$(APPLE_BUILD_PLATFORM)" \
+		--memory "$(APPLE_BUILD_MEMORY)" \
+		--progress plain \
+		.
+
+image-build-qa-svc-apple: image-build-dev-apple
+	$(call build_apple_application_images,dockfile/Dockerfile,$(QA_SVC_IMAGE))
+
+image-build-gateway-apple: image-build-dev-apple
+	$(call build_apple_application_images,dockfile/Dockerfile-gateway,$(GATEWAY_IMAGE))
+
+images-build-apple: image-build-dev-apple
+	$(call build_apple_application_images,dockfile/Dockerfile,$(QA_SVC_IMAGE),dockfile/Dockerfile-gateway,$(GATEWAY_IMAGE))
 
 deps-up-apple: check-local-credentials check-apple-container
 	$(call remove_containers,container)
@@ -298,7 +374,9 @@ release:
 update-submodule:
 	@git submodule update --init --recursive --remote
 
-.PHONY: check-local-credentials check-apple-container deps-up-apple deps-status-apple db-migrate-apple \
+.PHONY: check-local-credentials check-apple-container \
+	image-build-dev-apple image-build-qa-svc-apple image-build-gateway-apple images-build-apple \
+	deps-up-apple deps-status-apple db-migrate-apple \
 	deps-down-apple deps-reset-apple check-podman deps-up-podman \
 	deps-status-podman db-migrate-podman deps-down-podman \
 	deps-reset-podman run-service run-gateway \

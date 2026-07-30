@@ -1,0 +1,43 @@
+FROM node:24.18.0-bookworm AS node-toolchain
+FROM golang:1.26.5-bookworm AS go-toolchain
+FROM rust:1.97.1-bookworm
+
+LABEL org.opencontainers.image.authors="kevin"
+
+ENV LANG=C.UTF-8 \
+    GOPATH=/go \
+    GOROOT=/usr/local/go \
+    PATH=/usr/local/go/bin:/go/bin:$PATH
+
+# Copy the official multi-platform Node.js and Go toolchains into the Rust image.
+COPY --from=node-toolchain /usr/local/bin/node /usr/local/bin/node
+COPY --from=node-toolchain /usr/local/lib/node_modules /usr/local/lib/node_modules
+COPY --from=go-toolchain /usr/local/go /usr/local/go
+
+RUN ln -s ../lib/node_modules/npm/bin/npm-cli.js /usr/local/bin/npm \
+    && ln -s ../lib/node_modules/npm/bin/npx-cli.js /usr/local/bin/npx \
+    && mkdir -p "$GOPATH/bin" "$GOPATH/pkg" "$GOPATH/src" \
+    && chmod -R 1777 "$GOPATH" \
+    && apt-get update \
+    && apt-get install -y --no-install-recommends \
+        bash \
+        build-essential \
+        ca-certificates \
+        cmake \
+        curl \
+        git \
+        libtool \
+        net-tools \
+        pkg-config \
+        protobuf-compiler \
+        python3 \
+        python3-dev \
+        python3-pip \
+        python3-venv \
+        vim \
+        wget \
+    && rm -rf /var/lib/apt/lists/*
+
+WORKDIR /workspace
+
+CMD ["bash"]
