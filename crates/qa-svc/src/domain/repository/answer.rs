@@ -14,6 +14,5 @@ pub trait AnswerRepository: Send + Sync + 'static {
         question_id: u64,
         limit: u64,
         current_page: u64,
-        sort: String,
     ) -> Result<LatestAnswerResponse>;
 }

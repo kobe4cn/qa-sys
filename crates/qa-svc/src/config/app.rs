@@ -1,4 +1,4 @@
-/**
+/*
  *
  * app_debug: true # 是否开启调试模式
 app_port: 50051 # grpc service运行端口
@@ -32,7 +32,11 @@ use pulsar::{Pulsar, TokioExecutor};
 use qa_sys_core::{Config, ConfigTrait, RedisPool};
 use sqlx::PgPool;
 
-use crate::config::{pgsql::PgsqlConfig, xpulsar::PulsarConfig, xredis::RedisConfig};
+use crate::config::{
+    pgsql::PgsqlConfig,
+    xpulsar::{PulsarConfig, VoteMessagingConfig},
+    xredis::RedisConfig,
+};
 
 #[derive(Debug, serde::Deserialize, serde::Serialize, PartialEq)]
 pub struct AppConfig {
@@ -42,6 +46,7 @@ pub struct AppConfig {
     pub graceful_wait_time: u64,
     pub pgsql_conf: PgsqlConfig,
     pub pulsar_conf: PulsarConfig,
+    pub vote_messaging_conf: VoteMessagingConfig,
     pub redis_conf: RedisConfig,
     pub aes_key: String,
     pub aes_iv: String,
@@ -67,7 +72,6 @@ pub struct VoteJobAppState {
 pub static APP_CONFIG: Lazy<AppConfig> = Lazy::new(|| {
     let config_path = std::env::var("APP_CONFIG").unwrap_or_else(|_| "./app.yaml".to_string());
     let c = Config::load(&config_path).expect("Failed to load config file");
-    let config = serde_yaml::from_str(&c.contents().expect("Failed to read config file"))
-        .expect("Failed to parse config file");
-    config
+    serde_yaml::from_str(&c.contents().expect("Failed to read config file"))
+        .expect("Failed to parse config file")
 });

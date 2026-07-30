@@ -1,4 +1,4 @@
-/**
+/*
 * pulsar_conf:
  addr: pulsar://127.0.0.1:6650
  token: "" # pulsar auth token

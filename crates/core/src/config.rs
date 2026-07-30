@@ -1,4 +1,9 @@
-use std::{fs::File, io::Read, path::Path};
+#[allow(
+    clippy::disallowed_types,
+    reason = "configuration is loaded synchronously once during process startup"
+)]
+use std::fs::File;
+use std::{io::Read, path::Path};
 
 use anyhow::Result;
 use serde_yaml::Value;
@@ -13,6 +18,10 @@ pub struct Config {
     sections: String,
 }
 impl ConfigTrait for Config {
+    #[allow(
+        clippy::disallowed_types,
+        reason = "configuration is loaded synchronously once during process startup"
+    )]
     fn load<P: AsRef<Path>>(path: P) -> Result<Self>
     where
         Self: Sized,
@@ -32,6 +41,11 @@ impl ConfigTrait for Config {
 
 #[cfg(test)]
 mod tests {
+    #![allow(
+        clippy::disallowed_methods,
+        reason = "these synchronous unit tests use isolated temporary files"
+    )]
+
     use std::{
         fs,
         path::PathBuf,

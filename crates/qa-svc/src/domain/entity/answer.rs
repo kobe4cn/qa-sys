@@ -12,6 +12,7 @@
 use chrono::NaiveDateTime;
 use serde::{Deserialize, Serialize};
 use sqlx::prelude::FromRow;
+use thiserror::Error;
 
 const ANSWER_TABLE: &str = "answers";
 
@@ -42,55 +43,99 @@ pub struct LatestAnswerResponse {
     pub is_end: bool,
 }
 
+#[derive(Debug, Error, PartialEq, Eq)]
+pub enum PaginationError {
+    #[error("total must not be negative, got {0}")]
+    NegativeTotal(i64),
+    #[error("page size must be greater than zero, got {0}")]
+    InvalidPageSize(i64),
+    #[error("current page must be greater than zero, got {0}")]
+    InvalidCurrentPage(i64),
+}
+
 impl LatestAnswerResponse {
-    pub fn new(answers: Vec<AnswerEntity>, total: i64, page_size: i64, current_page: i64) -> Self {
-        let total_page = (total as f64 / page_size as f64).ceil() as i64;
-        let is_end = current_page >= total_page;
-        Self {
+    pub fn try_new(
+        answers: Vec<AnswerEntity>,
+        total: i64,
+        page_size: i64,
+        current_page: i64,
+    ) -> Result<Self, PaginationError> {
+        if total < 0 {
+            return Err(PaginationError::NegativeTotal(total));
+        }
+        if page_size <= 0 {
+            return Err(PaginationError::InvalidPageSize(page_size));
+        }
+        if current_page <= 0 {
+            return Err(PaginationError::InvalidCurrentPage(current_page));
+        }
+
+        let total_page = total / page_size + i64::from(total % page_size != 0);
+        let is_end = total_page == 0 || current_page >= total_page;
+        Ok(Self {
             answers,
             total,
             total_page,
             page_size,
             current_page,
             is_end,
-        }
+        })
     }
 }
 
 #[cfg(test)]
 mod tests {
-    use super::{AnswerEntity, LatestAnswerResponse};
+    use super::{AnswerEntity, LatestAnswerResponse, PaginationError};
 
     #[test]
-    fn test_should_calculate_empty_pagination() {
-        let response = LatestAnswerResponse::new(Vec::new(), 0, 10, 1);
+    fn test_should_calculate_empty_pagination() -> Result<(), PaginationError> {
+        let response = LatestAnswerResponse::try_new(Vec::new(), 0, 10, 1)?;
 
         assert_eq!(response.total_page, 0);
         assert!(response.is_end);
+        Ok(())
     }
 
     #[test]
-    fn test_should_calculate_exact_and_partial_pages() {
-        let exact = LatestAnswerResponse::new(Vec::new(), 20, 10, 1);
+    fn test_should_calculate_exact_and_partial_pages() -> Result<(), PaginationError> {
+        let exact = LatestAnswerResponse::try_new(Vec::new(), 20, 10, 1)?;
         assert_eq!(exact.total_page, 2);
         assert!(!exact.is_end);
 
-        let partial = LatestAnswerResponse::new(Vec::new(), 21, 10, 1);
+        let partial = LatestAnswerResponse::try_new(Vec::new(), 21, 10, 1)?;
         assert_eq!(partial.total_page, 3);
         assert!(!partial.is_end);
+        Ok(())
     }
 
     #[test]
-    fn test_should_mark_last_and_later_pages_as_end() {
-        let last_page = LatestAnswerResponse::new(vec![AnswerEntity::default()], 20, 10, 2);
+    fn test_should_mark_last_and_later_pages_as_end() -> Result<(), PaginationError> {
+        let last_page = LatestAnswerResponse::try_new(vec![AnswerEntity::default()], 20, 10, 2)?;
         assert!(last_page.is_end);
 
-        let later_page = LatestAnswerResponse::new(Vec::new(), 20, 10, 3);
+        let later_page = LatestAnswerResponse::try_new(Vec::new(), 20, 10, 3)?;
         assert!(later_page.is_end);
+        Ok(())
     }
 
     #[test]
     fn test_should_reject_zero_page_size() {
         assert!(LatestAnswerResponse::try_new(Vec::new(), 10, 0, 1).is_err());
+    }
+
+    #[test]
+    fn test_should_reject_negative_total() {
+        assert!(matches!(
+            LatestAnswerResponse::try_new(Vec::new(), -1, 10, 1),
+            Err(PaginationError::NegativeTotal(-1))
+        ));
+    }
+
+    #[test]
+    fn test_should_reject_non_positive_current_page() {
+        assert!(matches!(
+            LatestAnswerResponse::try_new(Vec::new(), 10, 10, 0),
+            Err(PaginationError::InvalidCurrentPage(0))
+        ));
     }
 }

@@ -26,5 +26,3 @@ impl UserVoteEntity {
         USER_VOTE_TABLE.to_string()
     }
 }
-
-

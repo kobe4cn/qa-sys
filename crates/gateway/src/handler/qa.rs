@@ -7,7 +7,7 @@ use autometrics::{
 };
 use axum::{
     Json,
-    extract::State,
+    extract::{Extension, State},
     http::StatusCode,
     response::{IntoResponse, Response},
 };
@@ -22,7 +22,9 @@ use serde::{Deserialize, Serialize};
 use thiserror::Error;
 use validator::{Validate, ValidationError};
 
-use crate::{config::app::AppState, handler::json_or_form::JsonOrForm};
+use crate::{
+    config::app::AppState, handler::json_or_form::JsonOrForm, router::AuthenticatedPrincipal,
+};
 
 const API_SLO: Objective = Objective::new("gateway")
     // We expect 99.9% of all requests to succeed.
@@ -114,10 +116,40 @@ pub struct RegisterRequest {
     pub phone: String,
 }
 fn validate_required(value: &str) -> Result<(), ValidationError> {
-    if value.len() == 0 {
+    if value.is_empty() {
         return Err(ValidationError::new("username is empty"));
     }
     Ok(())
+}
+
+fn validate_vote_action(value: &str) -> Result<(), ValidationError> {
+    if matches!(value, "up" | "down") {
+        return Ok(());
+    }
+
+    Err(ValidationError::new("action invalid"))
+}
+
+fn authenticated_username(
+    principal: &AuthenticatedPrincipal,
+    claimed_username: &str,
+) -> Result<String, GatewayError> {
+    if principal.username != claimed_username {
+        return Err(GatewayError::Forbidden);
+    }
+
+    Ok(principal.username.clone())
+}
+
+fn authenticated_token(
+    principal: &AuthenticatedPrincipal,
+    claimed_token: &str,
+) -> Result<String, GatewayError> {
+    if principal.token != claimed_token {
+        return Err(GatewayError::Forbidden);
+    }
+
+    Ok(principal.token.clone())
 }
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -174,7 +206,7 @@ pub async fn user_login(
 
 #[derive(Debug, Serialize, Deserialize, Validate)]
 pub struct LogoutRequest {
-    #[validate(length(max = 32, message = "token invalid"))]
+    #[validate(length(max = 512, message = "token invalid"))]
     #[validate(custom(function = "validate_required", message = "token is empty"))]
     pub token: String,
 }
@@ -186,11 +218,11 @@ pub struct LogoutReply {
 #[autometrics(objective = API_SLO)]
 pub async fn user_logout(
     State(state): State<Arc<AppState>>,
+    Extension(principal): Extension<AuthenticatedPrincipal>,
     JsonOrForm(payload): JsonOrForm<LogoutRequest>,
 ) -> Result<impl IntoResponse, GatewayError> {
-    let req = tonic::Request::new(UserLogoutRequest {
-        token: payload.token,
-    });
+    let token = authenticated_token(&principal, &payload.token)?;
+    let req = tonic::Request::new(UserLogoutRequest { token });
     let resp = state.grpc_client.clone().user_logout(req).await?;
     let reply = LogoutReply {
         state: resp.into_inner().state,
@@ -227,11 +259,13 @@ pub struct QuestionRequest {
 #[autometrics(objective = API_SLO)]
 pub async fn question_detail(
     State(state): State<Arc<AppState>>,
+    Extension(principal): Extension<AuthenticatedPrincipal>,
     JsonOrForm(payload): JsonOrForm<QuestionRequest>,
 ) -> Result<impl IntoResponse, GatewayError> {
+    let username = authenticated_username(&principal, &payload.username)?;
     let req = tonic::Request::new(QuestionDetailRequest {
         id: payload.question_id,
-        username: payload.username,
+        username,
     });
     let resp = state.grpc_client.clone().question_detail(req).await?;
     let reply = QuestionDetailResponse {
@@ -268,12 +302,14 @@ pub struct AddQuesReply {
 #[autometrics(objective = API_SLO)]
 pub async fn question_add(
     State(state): State<Arc<AppState>>,
+    Extension(principal): Extension<AuthenticatedPrincipal>,
     JsonOrForm(payload): JsonOrForm<AddQuestRequest>,
 ) -> Result<impl IntoResponse, GatewayError> {
+    let username = authenticated_username(&principal, &payload.username)?;
     let req = tonic::Request::new(AddQuestionRequest {
         title: payload.title,
         content: payload.content,
-        create_by: payload.username,
+        create_by: username,
     });
     let resp = state.grpc_client.clone().add_question(req).await?;
     let reply = AddQuesReply {
@@ -295,13 +331,15 @@ pub struct UpdateQuestReply {
 #[autometrics(objective=API_SLO)]
 pub async fn question_update(
     State(state): State<Arc<AppState>>,
+    Extension(principal): Extension<AuthenticatedPrincipal>,
     JsonOrForm(payload): JsonOrForm<UpdateQuestRequest>,
 ) -> Result<impl IntoResponse, GatewayError> {
+    let username = authenticated_username(&principal, &payload.question.updated_by)?;
     let req = tonic::Request::new(UpdateQuestionRequest {
         id: payload.id,
         title: payload.question.title,
         content: payload.question.content,
-        update_by: payload.question.updated_by,
+        update_by: username,
     });
     let resp = state.grpc_client.clone().update_question(req).await?;
     let reply = UpdateQuestReply {
@@ -327,11 +365,13 @@ pub struct DeleteQuestReply {
 #[autometrics(objective=API_SLO)]
 pub async fn question_delete(
     State(state): State<Arc<AppState>>,
+    Extension(principal): Extension<AuthenticatedPrincipal>,
     JsonOrForm(payload): JsonOrForm<DeleteQuestRequest>,
 ) -> Result<impl IntoResponse, GatewayError> {
+    let username = authenticated_username(&principal, &payload.username)?;
     let req = tonic::Request::new(DeleteQuestionRequest {
         id: payload.id,
-        username: payload.username,
+        username,
     });
     let resp = state.grpc_client.clone().delete_question(req).await?;
     let reply = DeleteQuestReply {
@@ -418,13 +458,15 @@ pub struct AddAnswerReply {
 #[autometrics(objective=API_SLO)]
 pub async fn answer_add(
     State(state): State<Arc<AppState>>,
+    Extension(principal): Extension<AuthenticatedPrincipal>,
     JsonOrForm(payload): JsonOrForm<AnswerAddRequest>,
 ) -> Result<impl IntoResponse, GatewayError> {
+    let username = authenticated_username(&principal, &payload.username)?;
     let req = tonic::Request::new(AddAnswerRequest {
         answer: Some(pb::AnswerEntity {
             question_id: payload.question_id,
             content: payload.content,
-            create_by: payload.username,
+            create_by: username,
             ..Default::default()
         }),
     });
@@ -452,11 +494,13 @@ pub struct AnswerDeleteReply {
 #[autometrics(objective=API_SLO)]
 pub async fn answer_delete(
     State(state): State<Arc<AppState>>,
+    Extension(principal): Extension<AuthenticatedPrincipal>,
     JsonOrForm(payload): JsonOrForm<AnswerDeleteRequest>,
 ) -> Result<impl IntoResponse, GatewayError> {
+    let username = authenticated_username(&principal, &payload.username)?;
     let req = tonic::Request::new(DeleteAnswerRequest {
         id: payload.id,
-        username: payload.username,
+        username,
     });
     let resp = state.grpc_client.clone().delete_answer(req).await?;
     let reply = AnswerDeleteReply {
@@ -485,12 +529,14 @@ pub struct AnswerUpdateReply {
 #[autometrics(objective=API_SLO)]
 pub async fn answer_update(
     State(state): State<Arc<AppState>>,
+    Extension(principal): Extension<AuthenticatedPrincipal>,
     JsonOrForm(payload): JsonOrForm<AnswerUpdateRequest>,
 ) -> Result<impl IntoResponse, GatewayError> {
+    let username = authenticated_username(&principal, &payload.username)?;
     let req = tonic::Request::new(UpdateAnswerRequest {
         id: payload.id,
         content: payload.content,
-        username: payload.username,
+        username,
     });
     let resp = state.grpc_client.clone().update_answer(req).await?;
     let reply = AnswerUpdateReply {
@@ -516,11 +562,13 @@ pub struct FindAnswerReply {
 #[autometrics(objective=API_SLO)]
 pub async fn answer_find_one(
     State(state): State<Arc<AppState>>,
+    Extension(principal): Extension<AuthenticatedPrincipal>,
     JsonOrForm(payload): JsonOrForm<FindAnswerRequest>,
 ) -> Result<impl IntoResponse, GatewayError> {
+    let username = authenticated_username(&principal, &payload.username)?;
     let req = tonic::Request::new(AnswerDetailRequest {
         id: payload.id,
-        username: payload.username,
+        username,
     });
     let resp = state.grpc_client.clone().answer_detail(req).await?;
     let reply = FindAnswerReply {
@@ -540,7 +588,7 @@ pub async fn answer_find_one(
 pub struct AnswerLastestRequest {
     #[validate(range(min = 1, message = "question_id invalid"))]
     pub question_id: u64,
-    #[validate(range(min = 0, message = "page invalid"))]
+    #[validate(range(min = 1, message = "page invalid"))]
     pub page: u64,
     #[validate(range(min = 1, max = 100, message = "limit invalid"))]
     pub limit: u64,
@@ -561,13 +609,15 @@ pub struct AnswerLatestResponse {
 #[autometrics(objective=API_SLO)]
 pub async fn answer_find_list(
     State(state): State<Arc<AppState>>,
+    Extension(principal): Extension<AuthenticatedPrincipal>,
     JsonOrForm(payload): JsonOrForm<AnswerLastestRequest>,
 ) -> Result<impl IntoResponse, GatewayError> {
+    let username = authenticated_username(&principal, &payload.username)?;
     let req = tonic::Request::new(AnswerListRequest {
         question_id: payload.question_id,
         page: payload.page,
         limit: payload.limit,
-        username: payload.username,
+        username,
     });
     let resp = state.grpc_client.clone().answer_list(req).await?;
     let respclone = resp.into_inner();
@@ -603,6 +653,7 @@ pub struct AnswerAgreeRequest {
     pub username: String,
     #[validate(custom(function = "validate_required", message = "action is empty"))]
     #[validate(length(min = 1, max = 32, message = "action invalid"))]
+    #[validate(custom(function = "validate_vote_action", message = "action invalid"))]
     pub action: String,
 }
 
@@ -614,11 +665,13 @@ pub struct AnswerAgreeReply {
 #[autometrics(objective = API_SLO)]
 pub async fn answer_agree(
     State(state): State<Arc<AppState>>,
+    Extension(principal): Extension<AuthenticatedPrincipal>,
     JsonOrForm(payload): JsonOrForm<AnswerAgreeRequest>,
 ) -> Result<impl IntoResponse, GatewayError> {
+    let username = authenticated_username(&principal, &payload.username)?;
     let req = tonic::Request::new(pb::AgreeAnswerRequest {
         id: payload.id,
-        create_by: payload.username,
+        create_by: username,
         action: payload.action,
     });
     let resp = state.grpc_client.clone().agree_answer(req).await?;
@@ -626,4 +679,115 @@ pub async fn answer_agree(
         state: resp.into_inner().state,
     };
     Ok(Json(reply))
+}
+
+#[cfg(test)]
+mod tests {
+    use axum::{
+        http::StatusCode,
+        response::{IntoResponse, Response},
+    };
+    use tonic::{Code, Status};
+    use validator::Validate;
+
+    use super::{
+        AnswerAgreeRequest, AnswerLastestRequest, GatewayError, LastestQuestRequest, LoginRequest,
+        RegisterRequest,
+    };
+
+    fn response_status(error: GatewayError) -> StatusCode {
+        let response: Response = error.into_response();
+        response.status()
+    }
+
+    #[test]
+    fn test_should_map_gateway_errors_to_http_statuses() {
+        for (error, expected) in [
+            (
+                GatewayError::InternalServerError,
+                StatusCode::INTERNAL_SERVER_ERROR,
+            ),
+            (GatewayError::BadRequest, StatusCode::BAD_REQUEST),
+            (GatewayError::NotFound, StatusCode::NOT_FOUND),
+            (GatewayError::Unauthorized, StatusCode::UNAUTHORIZED),
+            (GatewayError::Forbidden, StatusCode::FORBIDDEN),
+            (
+                GatewayError::ValidationError("invalid".to_string()),
+                StatusCode::BAD_REQUEST,
+            ),
+        ] {
+            assert_eq!(response_status(error), expected);
+        }
+    }
+
+    #[test]
+    fn test_should_map_grpc_errors_to_http_statuses() {
+        for (code, expected) in [
+            (Code::InvalidArgument, StatusCode::BAD_REQUEST),
+            (Code::NotFound, StatusCode::NOT_FOUND),
+            (Code::Unauthenticated, StatusCode::UNAUTHORIZED),
+            (Code::PermissionDenied, StatusCode::FORBIDDEN),
+            (Code::Unavailable, StatusCode::INTERNAL_SERVER_ERROR),
+        ] {
+            let error = GatewayError::GrpcError(Status::new(code, "rejected"));
+            assert_eq!(response_status(error), expected);
+        }
+    }
+
+    #[test]
+    fn test_should_accept_valid_request_boundaries() {
+        let register = RegisterRequest {
+            username: "a".repeat(32),
+            password: "p".repeat(32),
+            email: "alice@example.com".to_string(),
+            phone: "1".repeat(11),
+        };
+        let latest_question = LastestQuestRequest {
+            last_id: 0,
+            limit: 100,
+        };
+
+        assert!(register.validate().is_ok());
+        assert!(latest_question.validate().is_ok());
+    }
+
+    #[test]
+    fn test_should_reject_invalid_registration_and_login_fields() {
+        let register = RegisterRequest {
+            username: String::new(),
+            password: "short".to_string(),
+            email: "invalid".to_string(),
+            phone: "123".to_string(),
+        };
+        let login = LoginRequest {
+            username: "a".repeat(33),
+            password: "p".repeat(33),
+        };
+
+        assert!(register.validate().is_err());
+        assert!(login.validate().is_err());
+    }
+
+    #[test]
+    fn test_should_reject_zero_answer_page() {
+        let request = AnswerLastestRequest {
+            question_id: 1,
+            page: 0,
+            limit: 10,
+            username: "alice".to_string(),
+        };
+
+        assert!(request.validate().is_err());
+    }
+
+    #[test]
+    fn test_should_reject_unsupported_vote_action() {
+        let request = AnswerAgreeRequest {
+            id: 1,
+            username: "alice".to_string(),
+            action: "sideways".to_string(),
+        };
+
+        assert!(request.validate().is_err());
+    }
 }

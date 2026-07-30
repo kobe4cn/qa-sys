@@ -1,6 +1,5 @@
-use anyhow::Result;
+use anyhow::{Context, Result, ensure};
 use chrono::Local;
-
 use sqlx::PgPool;
 use tracing::info;
 
@@ -20,7 +19,7 @@ impl AnswerRepositoryImpl {
 impl AnswerRepository for AnswerRepositoryImpl {
     async fn check_answer_exist(&self, id: u64, username: String) -> Result<bool> {
         let sql = format!(
-            "select id from {} where question_id=$1 and created_by=$2",
+            "select id from {} where id=$1 and created_by=$2",
             AnswerEntity::table_name()
         );
         let result: Option<i64> = sqlx::query_scalar(sqlx::AssertSqlSafe(sql))
@@ -44,17 +43,15 @@ impl AnswerRepository for AnswerRepositoryImpl {
      */
     async fn add(&self, answer: AnswerEntity) -> Result<u64> {
         let sql = format!(
-            "insert into {} (question_id,content,created_by,created_at) values ($1,$2,$3,$4) returning id",
+            "insert into {} (question_id,content,created_by,created_at) values ($1,$2,$3,$4) \
+             returning id",
             AnswerEntity::table_name()
         );
         let result: i64 = sqlx::query_scalar(sqlx::AssertSqlSafe(sql))
             .bind(answer.question_id)
             .bind(answer.content)
             .bind(answer.created_by)
-            .bind(answer.updated_by)
             .bind(answer.created_at)
-            .bind(answer.updated_at)
-            .bind(answer.agree_count)
             .fetch_one(&self.pg)
             .await?;
         Ok(result as u64)
@@ -68,7 +65,7 @@ impl AnswerRepository for AnswerRepositoryImpl {
         let res = sqlx::query(sqlx::AssertSqlSafe(sql))
             .bind(content)
             .bind(updated_by)
-            .bind(Local::now().format("%Y-%m-%d %H:%M:%S").to_string())
+            .bind(Local::now().naive_local())
             .bind(id as i64)
             .execute(&self.pg)
             .await?;
@@ -105,35 +102,47 @@ impl AnswerRepository for AnswerRepositoryImpl {
     async fn find_latest(
         &self,
         question_id: u64,
-        page: u64,
         limit: u64,
-        sort: String,
+        current_page: u64,
     ) -> Result<LatestAnswerResponse> {
+        ensure!(limit > 0, "answer page size must be greater than zero");
+        let question_id =
+            i64::try_from(question_id).context("answer question ID exceeds PostgreSQL bigint")?;
+        let page_size =
+            i64::try_from(limit).context("answer page size exceeds PostgreSQL bigint")?;
+        let current_page =
+            i64::try_from(current_page).context("answer page number exceeds PostgreSQL bigint")?;
+        let page_index = current_page
+            .checked_sub(1)
+            .context("answer page number must be greater than zero")?;
+        let offset = page_index
+            .checked_mul(page_size)
+            .context("answer page offset overflow")?;
+
         let countsql = format!(
             "select count(*) from {} where question_id=$1",
             AnswerEntity::table_name()
         );
         let total = sqlx::query_scalar::<_, i64>(sqlx::AssertSqlSafe(countsql))
-            .bind(question_id as i64)
+            .bind(question_id)
             .fetch_one(&self.pg)
             .await?;
 
         let sql = format!(
-            "select * from {} where question_id=$1 order by $2 desc limit $3 offset $4",
+            "select * from {} where question_id=$1 order by id desc limit $2 offset $3",
             AnswerEntity::table_name()
         );
         let res = sqlx::query_as::<_, AnswerEntity>(sqlx::AssertSqlSafe(sql))
-            .bind(question_id as i64)
-            .bind(sort)
-            .bind(limit as i64)
-            .bind((page - 1) as i64 * limit as i64)
+            .bind(question_id)
+            .bind(page_size)
+            .bind(offset)
             .fetch_all(&self.pg)
             .await?;
-        Ok(LatestAnswerResponse::new(
+        Ok(LatestAnswerResponse::try_new(
             res,
             total,
-            limit as i64,
-            page as i64,
-        ))
+            page_size,
+            current_page,
+        )?)
     }
 }

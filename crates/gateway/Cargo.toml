@@ -36,3 +36,10 @@ validator.workspace = true
 http-body-util.workspace = true
 
 qa-sys-core.workspace = true
+
+[dev-dependencies]
+tower.workspace = true
+sqlx.workspace = true
+redis.workspace = true
+pulsar.workspace = true
+qa-svc = { path = "../qa-svc" }

@@ -3,7 +3,7 @@ use std::time::Duration;
 use anyhow::{Ok, Result};
 use r2d2::ManageConnection;
 use redis::{Client, cluster::ClusterClient};
-/**
+/*
 * redis_conf:
  dsn: "redis://:@127.0.0.1:6379/0"   # redis dsn信息，用于连接redis
  max_size: 300                       # 最大连接个数，默认为300

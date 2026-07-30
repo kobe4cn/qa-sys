@@ -34,24 +34,30 @@ const PUBLIC_PATHS: [&str; 5] = [
     "/api/user/login",
 ];
 
+#[derive(Clone)]
+pub(crate) struct AuthenticatedPrincipal {
+    pub(crate) username: String,
+    pub(crate) token: String,
+}
+
 pub fn api_router(state: Arc<AppState>) -> Result<Router> {
     let api_routers = Router::new()
         .route("/home", get(qa::root))
         .route("/hello", get(qa::hello))
-        .route("user/register", post(qa::user_register))
-        .route("user/login", post(qa::user_login))
-        .route("user/logout", post(qa::user_logout))
-        .route("question/add", post(qa::question_add))
-        .route("question/detail", post(qa::question_detail))
-        .route("question/update", post(qa::question_update))
-        .route("question/delete", post(qa::question_delete))
-        .route("question/find_latest", post(qa::question_find_latest))
-        .route("answer/add", post(qa::answer_add))
-        .route("answer/update", post(qa::answer_update))
-        .route("answer/delete", post(qa::answer_delete))
-        .route("answer/find_one", post(qa::answer_find_one))
-        .route("answer/find_list", post(qa::answer_find_list))
-        .route("user_vote/add", post(qa::answer_agree))
+        .route("/user/register", post(qa::user_register))
+        .route("/user/login", post(qa::user_login))
+        .route("/user/logout", post(qa::user_logout))
+        .route("/question/add", post(qa::question_add))
+        .route("/question/detail", post(qa::question_detail))
+        .route("/question/update", post(qa::question_update))
+        .route("/question/delete", post(qa::question_delete))
+        .route("/question/find_latest", post(qa::question_find_latest))
+        .route("/answer/add", post(qa::answer_add))
+        .route("/answer/update", post(qa::answer_update))
+        .route("/answer/delete", post(qa::answer_delete))
+        .route("/answer/find_one", post(qa::answer_find_one))
+        .route("/answer/find_list", post(qa::answer_find_list))
+        .route("/user_vote/add", post(qa::answer_agree))
         .with_state(Arc::clone(&state))
         .fallback(api_not_found);
     let router = Router::new()
@@ -78,7 +84,7 @@ async fn verify_token(
     let verification = timeout(
         TOKEN_VERIFICATION_TIMEOUT,
         grpc_client.verify_token(VerifyTokenRequest {
-            token,
+            token: token.clone(),
             request_id: Uuid::new_v4().simple().to_string(),
         }),
     )
@@ -88,7 +94,9 @@ async fn verify_token(
     .into_inner();
     let username = authenticated_username(verification)?;
 
-    request.extensions_mut().insert(username);
+    request
+        .extensions_mut()
+        .insert(AuthenticatedPrincipal { username, token });
     Ok(next.run(request).await)
 }
 
@@ -161,13 +169,29 @@ async fn method_not_found() -> Result<impl IntoResponse, GatewayError> {
 
 #[cfg(test)]
 mod tests {
+    use std::sync::Arc;
+
     use axum::http::{HeaderMap, HeaderValue};
-    use pb::VerifyTokenResponse;
-    use tonic::{Code, Status};
+    use pb::{VerifyTokenResponse, qa_service_client::QaServiceClient};
+    use tonic::{Code, Status, transport::Endpoint};
 
     use super::{
-        authenticated_username, authorization_token, is_public_path, map_verification_error,
+        api_router, authenticated_username, authorization_token, is_public_path,
+        map_verification_error,
     };
+    use crate::config::app::AppState;
+
+    fn test_state() -> Arc<AppState> {
+        let channel = Endpoint::from_static("http://127.0.0.1:1").connect_lazy();
+        Arc::new(AppState {
+            grpc_client: QaServiceClient::new(channel),
+        })
+    }
+
+    #[tokio::test]
+    async fn test_should_build_api_router_with_all_routes() {
+        assert!(api_router(test_state()).is_ok());
+    }
 
     #[test]
     fn test_should_identify_only_configured_public_paths() {

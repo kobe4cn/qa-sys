@@ -13,6 +13,11 @@ pgsql_conf:
 pulsar_conf:
   addr: pulsar://127.0.0.1:6650
   token: "" # pulsar auth token
+vote_messaging_conf:
+  topic: user-vote-topic
+  subscription: qa-sys
+  producer_name: qa-sys
+  consumer_name: group-1
 redis_conf:
   dsn: "redis://:redis@127.0.0.1:6379/0"   # redis dsn信息，用于连接redis
   max_size: 300                       # 最大连接个数，默认为300

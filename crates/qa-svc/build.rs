@@ -4,11 +4,9 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let proto_dir: PathBuf = "../../proto".into();
     let mut file_list: Vec<PathBuf> = Vec::new();
     let lists = proto_dir.read_dir()?;
-    for entry in lists {
-        if let Ok(entry) = entry {
-            if entry.path().is_file() {
-                file_list.push(entry.path());
-            }
+    for entry in lists.flatten() {
+        if entry.path().is_file() {
+            file_list.push(entry.path());
         }
     }
     let out_dir = Path::new("../pb/src");

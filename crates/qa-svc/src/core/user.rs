@@ -23,22 +23,6 @@ impl UserRepositoryImpl {
     }
 }
 
-#[cfg(test)]
-mod tests {
-    use super::UserRepositoryImpl;
-
-    #[test]
-    fn test_should_generate_empty_placeholder_list_for_zero_values() {
-        assert_eq!(UserRepositoryImpl::gen_in_placeholder(0), "");
-    }
-
-    #[test]
-    fn test_should_generate_contiguous_postgres_placeholders() {
-        assert_eq!(UserRepositoryImpl::gen_in_placeholder(1), "$1");
-        assert_eq!(UserRepositoryImpl::gen_in_placeholder(4), "$1,$2,$3,$4",);
-    }
-}
-
 #[async_trait::async_trait]
 impl UserRepository for UserRepositoryImpl {
     async fn check_user_exist(&self, username: String) -> Result<bool> {
@@ -62,7 +46,7 @@ impl UserRepository for UserRepositoryImpl {
         let pwd = format!("{:x}", md5::compute(password.as_bytes()));
 
         let openid = Uuid::new_v4().to_string().replace('-', "");
-        let create_at = chrono::Local::now().format("%Y-%m-%d %H:%M:%S").to_string();
+        let create_at = chrono::Local::now().naive_local();
         let _ = sqlx::query(sqlx::AssertSqlSafe(&*sql))
             .bind(username)
             .bind(pwd)
@@ -87,6 +71,10 @@ impl UserRepository for UserRepositoryImpl {
         Ok(user)
     }
     async fn fetch_users(&self, usernames: Vec<String>) -> Result<Vec<UserEntity>> {
+        if usernames.is_empty() {
+            return Ok(Vec::new());
+        }
+
         let users = Self::gen_in_placeholder(usernames.len());
         let sql = format!(
             "select * from {} where username in ({})",
@@ -155,5 +143,21 @@ impl UserRepository for UserRepositoryImpl {
             }
         }
         Ok(())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::UserRepositoryImpl;
+
+    #[test]
+    fn test_should_generate_empty_placeholder_list_for_zero_values() {
+        assert_eq!(UserRepositoryImpl::gen_in_placeholder(0), "");
+    }
+
+    #[test]
+    fn test_should_generate_contiguous_postgres_placeholders() {
+        assert_eq!(UserRepositoryImpl::gen_in_placeholder(1), "$1");
+        assert_eq!(UserRepositoryImpl::gen_in_placeholder(4), "$1,$2,$3,$4",);
     }
 }

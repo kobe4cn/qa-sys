@@ -1,50 +1,68 @@
-use base64::{Engine, engine::general_purpose::STANDARD};
-use crypto::{
-    aes, blockmodes,
-    buffer::{self, BufferResult, ReadBuffer, WriteBuffer},
-    symmetriccipher::SymmetricCipherError,
+use std::fmt;
+
+use aes::{
+    Aes128, Aes192, Aes256,
+    cipher::{BlockModeDecrypt, BlockModeEncrypt, KeyIvInit, block_padding::Pkcs7},
 };
+use base64::{Engine, engine::general_purpose::STANDARD};
 use thiserror::Error;
 
-/// 自定义 AES 加密解密过程中可能发生的错误类型。
-///
-/// 由于 `rust-crypto` 库中的 `SymmetricCipherError` 仅实现了 `Debug` 而未实现 `std::fmt::Display`，
-/// 在 `thiserror` 的 `#[error(...)]` 属性中需要显式指定使用 `{:?}` 调用 `Debug` 格式化，
-/// 以解决 `SymmetricCipherError: std::fmt::Display` 未满足的编译错误。
+const AES_BLOCK_SIZE: usize = 16;
+
+/// AES-CBC 加密或解密失败。
 #[derive(Error, Debug)]
 pub enum AesError {
     #[error("Invalid AES key length: expected {expected} bytes, got {actual}")]
     InvalidKeyLength { expected: usize, actual: usize },
     #[error("Invalid AES IV length: expected {expected} bytes, got {actual}")]
     InvalidIvLength { expected: usize, actual: usize },
-    #[error("AES encryption error: {0:?}")]
-    EncryptError(SymmetricCipherError),
-    #[error("AES decryption error: {0:?}")]
-    DecryptError(SymmetricCipherError),
+    #[error("AES encryption error: {0}")]
+    EncryptError(String),
+    #[error("AES decryption error: {0}")]
+    DecryptError(String),
     #[error("Base64 decode error: {0}")]
     Base64DecodeError(#[from] base64::DecodeError),
     #[error("Invalid UTF-8 data: {0}")]
     Utf8Error(#[from] std::string::FromUtf8Error),
 }
 
+/// 使用 PKCS#7 填充和 Base64 编码的 AES-CBC 加解密器。
 pub struct AesCBCCrypto {
     key: Vec<u8>,
     iv: Vec<u8>,
-    key_size: aes::KeySize,
+    key_size: AesKeySize,
 }
 
+/// 支持的 AES 密钥长度。
+#[derive(Debug, Clone, Copy)]
 pub enum AesKeySize {
     Size128,
     Size192,
     Size256,
 }
 
+impl fmt::Debug for AesCBCCrypto {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter
+            .debug_struct("AesCBCCrypto")
+            .field("key", &"[REDACTED]")
+            .field("iv", &"[REDACTED]")
+            .field("key_size", &self.key_size)
+            .finish()
+    }
+}
+
 impl AesCBCCrypto {
+    /// 创建一个与指定 AES 密钥长度匹配的 CBC 加解密器。
+    ///
+    /// # Errors
+    ///
+    /// 当密钥长度与 `key_size` 不匹配或 IV 不是 16 字节时返回错误。
     pub fn new(key: &str, iv: &str, key_size: AesKeySize) -> Result<Self, AesError> {
-        let (key_size, expected_key_length) = match key_size {
-            AesKeySize::Size128 => (aes::KeySize::KeySize128, 16),
-            AesKeySize::Size192 => (aes::KeySize::KeySize192, 24),
-            AesKeySize::Size256 => (aes::KeySize::KeySize256, 32),
+        let expected_key_length = match key_size {
+            AesKeySize::Size128 => 16,
+            AesKeySize::Size192 => 24,
+            AesKeySize::Size256 => 32,
         };
         if key.len() != expected_key_length {
             return Err(AesError::InvalidKeyLength {
@@ -53,7 +71,6 @@ impl AesCBCCrypto {
             });
         }
 
-        const AES_BLOCK_SIZE: usize = 16;
         if iv.len() != AES_BLOCK_SIZE {
             return Err(AesError::InvalidIvLength {
                 expected: AES_BLOCK_SIZE,
@@ -68,70 +85,52 @@ impl AesCBCCrypto {
         })
     }
 
+    /// 加密 UTF-8 字符串并返回 Base64 编码的密文。
+    ///
+    /// # Errors
+    ///
+    /// 当内部密码器初始化失败时返回错误。
     pub fn encrypt(&self, data: &str) -> Result<String, AesError> {
-        let mut encryptor =
-            aes::cbc_encryptor(self.key_size, &self.key, &self.iv, blockmodes::PkcsPadding);
-        let mut final_result = Vec::<u8>::new();
-        let mut read_buffer = buffer::RefReadBuffer::new(data.as_bytes());
-        let mut buffer = [0; 4096];
-        let mut write_buffer = buffer::RefWriteBuffer::new(&mut buffer);
+        let encrypted = match self.key_size {
+            AesKeySize::Size128 => cbc::Encryptor::<Aes128>::new_from_slices(&self.key, &self.iv)
+                .map_err(|error| AesError::EncryptError(error.to_string()))?
+                .encrypt_padded_vec::<Pkcs7>(data.as_bytes()),
+            AesKeySize::Size192 => cbc::Encryptor::<Aes192>::new_from_slices(&self.key, &self.iv)
+                .map_err(|error| AesError::EncryptError(error.to_string()))?
+                .encrypt_padded_vec::<Pkcs7>(data.as_bytes()),
+            AesKeySize::Size256 => cbc::Encryptor::<Aes256>::new_from_slices(&self.key, &self.iv)
+                .map_err(|error| AesError::EncryptError(error.to_string()))?
+                .encrypt_padded_vec::<Pkcs7>(data.as_bytes()),
+        };
 
-        loop {
-            // 将 SymmetricCipherError 显式映射为 AesError，从而能够透明传播给 anyhow::Result
-            let result = encryptor
-                .encrypt(&mut read_buffer, &mut write_buffer, true)
-                .map_err(AesError::EncryptError)?;
-
-            // "write_buffer.take_read_buffer().take_remaining()"
-            // 表示从可写缓冲区提取已写入的数据切片并追加到最终结果中
-            final_result.extend(
-                write_buffer
-                    .take_read_buffer()
-                    .take_remaining()
-                    .iter()
-                    .copied(),
-            );
-
-            match result {
-                BufferResult::BufferUnderflow => break,
-                BufferResult::BufferOverflow => {}
-            }
-        }
-
-        Ok(STANDARD.encode(final_result))
+        Ok(STANDARD.encode(encrypted))
     }
 
+    /// 解密 Base64 编码的 AES-CBC 密文。
+    ///
+    /// # Errors
+    ///
+    /// 当输入不是有效 Base64、密文填充无效、密码器初始化失败或明文不是 UTF-8 时返回错误。
     pub fn decrypt(&self, encrypted_base64: &str) -> Result<String, AesError> {
         let encrypted_data = STANDARD
             .decode(encrypted_base64)
             .map_err(AesError::Base64DecodeError)?;
-        let mut decryptor =
-            aes::cbc_decryptor(self.key_size, &self.key, &self.iv, blockmodes::PkcsPadding);
-        let mut final_result = Vec::<u8>::new();
-        let mut read_buffer = buffer::RefReadBuffer::new(&encrypted_data);
-        let mut buffer = [0; 4096];
-        let mut write_buffer = buffer::RefWriteBuffer::new(&mut buffer);
+        let decrypted = match self.key_size {
+            AesKeySize::Size128 => cbc::Decryptor::<Aes128>::new_from_slices(&self.key, &self.iv)
+                .map_err(|error| AesError::DecryptError(error.to_string()))?
+                .decrypt_padded_vec::<Pkcs7>(&encrypted_data)
+                .map_err(|error| AesError::DecryptError(error.to_string()))?,
+            AesKeySize::Size192 => cbc::Decryptor::<Aes192>::new_from_slices(&self.key, &self.iv)
+                .map_err(|error| AesError::DecryptError(error.to_string()))?
+                .decrypt_padded_vec::<Pkcs7>(&encrypted_data)
+                .map_err(|error| AesError::DecryptError(error.to_string()))?,
+            AesKeySize::Size256 => cbc::Decryptor::<Aes256>::new_from_slices(&self.key, &self.iv)
+                .map_err(|error| AesError::DecryptError(error.to_string()))?
+                .decrypt_padded_vec::<Pkcs7>(&encrypted_data)
+                .map_err(|error| AesError::DecryptError(error.to_string()))?,
+        };
 
-        loop {
-            let result = decryptor
-                .decrypt(&mut read_buffer, &mut write_buffer, true)
-                .map_err(AesError::DecryptError)?;
-
-            final_result.extend(
-                write_buffer
-                    .take_read_buffer()
-                    .take_remaining()
-                    .iter()
-                    .copied(),
-            );
-
-            match result {
-                BufferResult::BufferUnderflow => break,
-                BufferResult::BufferOverflow => {}
-            }
-        }
-
-        String::from_utf8(final_result).map_err(AesError::Utf8Error)
+        String::from_utf8(decrypted).map_err(AesError::Utf8Error)
     }
 }
 
@@ -153,6 +152,31 @@ mod tests {
         let decrypted = crypto.decrypt(&ciphertext)?;
 
         assert_eq!(plaintext, decrypted);
+        Ok(())
+    }
+
+    #[test]
+    fn test_should_preserve_legacy_aes_cbc_ciphertext_format() -> Result<()> {
+        let crypto =
+            AesCBCCrypto::new("1234567890123456", "1234567890123456", AesKeySize::Size128)?;
+        let legacy_ciphertext = "N7xB4AmTENuP6jN7K71JZkxfVjy9V7d9BXwd1ptfHPg=";
+
+        assert_eq!(crypto.encrypt("legacy-token-fixture")?, legacy_ciphertext);
+        assert_eq!(crypto.decrypt(legacy_ciphertext)?, "legacy-token-fixture",);
+        Ok(())
+    }
+
+    #[test]
+    fn test_should_redact_key_and_iv_from_debug_output() -> Result<()> {
+        let key = "1234567890123456";
+        let iv = "abcdefghijklmnop";
+        let crypto = AesCBCCrypto::new(key, iv, AesKeySize::Size128)?;
+
+        let debug_output = format!("{crypto:?}");
+
+        assert!(!debug_output.contains(key));
+        assert!(!debug_output.contains(iv));
+        assert!(debug_output.contains("[REDACTED]"));
         Ok(())
     }
 

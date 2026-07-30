@@ -2,7 +2,7 @@ use chrono::NaiveDateTime;
 use serde::{Deserialize, Serialize};
 use sqlx::prelude::FromRow;
 
-/**
+/*
  * CREATE TABLE users (
     id bigserial PRIMARY KEY,
     username varchar(50) NOT NULL,

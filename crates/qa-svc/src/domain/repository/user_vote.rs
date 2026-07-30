@@ -1,8 +1,9 @@
 use std::collections::HashMap;
 
-use crate::domain::entity::VoteMessage;
 use anyhow::Result;
 use tokio::sync::watch;
+
+use crate::domain::entity::VoteMessage;
 
 #[async_trait::async_trait]
 pub trait UserVoteRepository: Send + Sync + 'static {

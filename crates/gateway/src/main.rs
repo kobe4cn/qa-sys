@@ -2,10 +2,9 @@ use std::{net::SocketAddr, sync::Arc, time::Duration};
 
 use gateway::{
     config::app::{APP_CONFIG, AppState},
-    router::router::api_router,
+    router::api_router,
 };
 use pb::qa_service_client::QaServiceClient;
-
 use qa_sys_core::{graceful_shutdown, prometheus_init};
 use tokio::net::TcpListener;
 

@@ -1,7 +1,10 @@
 use std::collections::HashMap;
 
+use autometrics::{
+    autometrics,
+    objectives::{Objective, ObjectiveLatency, ObjectivePercentile},
+};
 use chrono::{Local, TimeZone};
-
 use pb::{UserRegisterResponse, qa_service_server::QaService};
 use qa_sys_core::{AesCBCCrypto, AesKeySize};
 use tonic::{
@@ -15,10 +18,6 @@ use crate::{
     APP_CONFIG, AnswerEntity, AnswerRepository, AnswerRepositoryImpl, AppState, QuestionEntity,
     QuestionRepository, QuestionRepositoryImpl, UserRepository, UserRepositoryImpl,
     UserSessionEntity, UserVoteRepository, UserVoteRepositoryImpl, VoteMessage,
-};
-use autometrics::{
-    autometrics,
-    objectives::{Objective, ObjectiveLatency, ObjectivePercentile},
 };
 
 const API_SLO: Objective = Objective::new("grpc")
@@ -36,7 +35,7 @@ pub struct QaServiceImpl {
 }
 
 impl QaServiceImpl {
-    pub fn new(state: AppState) -> impl QaService {
+    pub fn new(state: AppState) -> Self {
         let answer_repo = Box::new(AnswerRepositoryImpl::new(state.pgsql_pool.clone()));
         let question_repo = Box::new(QuestionRepositoryImpl::new(
             state.pgsql_pool.clone(),
@@ -45,6 +44,7 @@ impl QaServiceImpl {
         let user_vote_repo = Box::new(UserVoteRepositoryImpl::new(
             state.pgsql_pool.clone(),
             state.pulsar_client.clone(),
+            APP_CONFIG.vote_messaging_conf.clone(),
         ));
         let user_repo = Box::new(UserRepositoryImpl::new(
             state.pgsql_pool.clone(),
@@ -63,41 +63,40 @@ impl QaServiceImpl {
     }
     // 验证token是否有效，返回用户唯一标识openid
     fn check_token(&self, token: &str) -> Result<String, String> {
-        if token.len() == 0 {
+        if token.is_empty() {
             return Err("token length invalid".to_string());
         }
 
-        // 解密token
-        let decrypted = self.aes_crypto.decrypt(token);
-        if let Err(err) = decrypted {
-            info!("failed to decrypt token:{},error:{:?}", token, err);
-            return Err(format!("parse token error:{:?}", err));
-        }
-        let payload = decrypted.unwrap();
-        let arr = payload.split(":").collect::<Vec<&str>>();
-        if arr.len() != 3 {
+        let payload = self.aes_crypto.decrypt(token).map_err(|error| {
+            info!("failed to decrypt authentication token, error:{error:?}");
+            format!("parse token error:{error:?}")
+        })?;
+        let mut parts = payload.split(':');
+        let Some(_login_id) = parts.next() else {
+            return Err("token invalid".to_string());
+        };
+        let Some(openid) = parts.next() else {
+            return Err("token invalid".to_string());
+        };
+        let Some(expire_time) = parts.next() else {
+            return Err("token invalid".to_string());
+        };
+        if parts.next().is_some() {
             return Err("token invalid".to_string());
         }
-
-        let openid = arr[1].to_string();
         if openid.len() != 32 {
             return Err("token length invalid".to_string());
         }
 
-        // 判断token是否过期
-        let expired = arr[2].parse::<i64>();
-        if let Err(err) = expired {
-            return Err(format!("token expire_time parse error:{}", err));
-        }
-        let expire_time = expired.unwrap();
+        let expire_time = expire_time
+            .parse::<i64>()
+            .map_err(|error| format!("token expire_time parse error:{error}"))?;
         let current_time = Local::now().timestamp();
-        let elapsed = (current_time - expire_time).abs();
-        if elapsed >= 86400 {
+        if current_time >= expire_time {
             return Err("token has expired".to_string());
         }
 
-        // 返回openid
-        Ok(openid)
+        Ok(openid.to_string())
     }
 }
 
@@ -199,34 +198,25 @@ impl QaService for QaServiceImpl {
         request: tonic::Request<pb::UserRegisterRequest>,
     ) -> std::result::Result<tonic::Response<pb::UserRegisterResponse>, tonic::Status> {
         let req = request.into_inner();
-        let res = self.user_repo.check_user_exist(req.username.clone()).await;
-        match res {
-            Ok(_) => {
-                return Err(Status::new(Code::Aborted, "用户名已存在".to_string()));
-            }
-            Err(err) => {
-                let err = err.downcast().expect("failed to convert into sqlx error");
-                match err {
-                    sqlx::Error::RowNotFound => {
-                        let result = self
-                            .user_repo
-                            .add(req.username.clone(), req.password.clone())
-                            .await;
-                        if let Err(err) = result {
-                            return Err(Status::new(
-                                Code::Unknown,
-                                format!("用户 {} 注册失败:{}", req.username, err),
-                            ));
-                        }
-                    }
-                    other => {
-                        return Err(Status::new(
-                            Code::Internal,
-                            format!("服务内部错误:{}", other),
-                        ));
-                    }
-                }
-            }
+        let exists = self
+            .user_repo
+            .check_user_exist(req.username.clone())
+            .await
+            .map_err(|error| {
+                Status::new(
+                    Code::Internal,
+                    format!("查询用户 {} 失败:{}", req.username, error),
+                )
+            })?;
+        if exists {
+            return Err(Status::new(Code::AlreadyExists, "用户名已存在"));
+        }
+
+        if let Err(error) = self.user_repo.add(req.username.clone(), req.password).await {
+            return Err(Status::new(
+                Code::Unknown,
+                format!("用户 {} 注册失败:{}", req.username, error),
+            ));
         }
         let reply = UserRegisterResponse { state: 1 };
         Ok(tonic::Response::new(reply))
@@ -519,7 +509,7 @@ impl QaService for QaServiceImpl {
             ));
         }
         let result = question_res.unwrap();
-        if result.questions.len() == 0 {
+        if result.questions.is_empty() {
             let reply = pb::LatestQuestionResponse {
                 last_id: 0,
                 is_end: true,
@@ -555,7 +545,7 @@ impl QaService for QaServiceImpl {
         let req = request.into_inner();
         let res = self
             .answer_repo
-            .find_latest(req.question_id, req.limit, req.page, "id desc".to_string())
+            .find_latest(req.question_id, req.limit, req.page)
             .await;
         if let Err(err) = res {
             return Err(Status::new(

@@ -1,0 +1,15 @@
+global:
+  scrape_interval: 15s
+
+scrape_configs:
+  - job_name: "prometheus"
+    static_configs:
+      - targets: ["localhost:9090"]
+  # qa gateway 服务的 metrics 数据采集
+  - job_name: "qa_gateway"
+    static_configs:
+      - targets: ["localhost:1338"]
+  # qa-svc 服务的 metrics 数据采集
+  - job_name: "qa_svc"
+    static_configs:
+      - targets: ["localhost:2338"]

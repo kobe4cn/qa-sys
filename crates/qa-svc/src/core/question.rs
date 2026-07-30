@@ -1,9 +1,10 @@
-use crate::{LatestQuestionResponse, QuestionEntity, QuestionRepository};
-use anyhow::{Result, anyhow};
+use anyhow::{Context, Result, anyhow};
 use qa_sys_core::RedisPool;
 use redis::Commands;
 use sqlx::PgPool;
 use tracing::info;
+
+use crate::{LatestQuestionResponse, QuestionEntity, QuestionRepository};
 
 pub struct QuestionRepositoryImpl {
     pg: PgPool,
@@ -153,7 +154,8 @@ CREATE TABLE questions (
 impl QuestionRepository for QuestionRepositoryImpl {
     async fn add(&self, question: QuestionEntity) -> Result<u64> {
         let sql = format!(
-            "INSERT INTO {} (title, content, created_by, created_at) VALUES ($1, $2, $3, $4) RETURNING id",
+            "INSERT INTO {} (title, content, created_by, created_at) VALUES ($1, $2, $3, $4) \
+             RETURNING id",
             QuestionEntity::table_name()
         );
         let id: i64 = sqlx::query_scalar(sqlx::AssertSqlSafe(&*sql))
@@ -183,7 +185,7 @@ impl QuestionRepository for QuestionRepositoryImpl {
     }
     async fn delete(&self, id: u64, username: String) -> Result<()> {
         let sql = format!(
-            "delete from {} where id=$1 and create_by=$2",
+            "delete from {} where id=$1 and created_by=$2",
             QuestionEntity::table_name()
         );
         let res = sqlx::query(sqlx::AssertSqlSafe(&*sql))
@@ -203,23 +205,36 @@ impl QuestionRepository for QuestionRepositoryImpl {
         Ok(question)
     }
     async fn find_latest(&self, last_id: u64, limit: u64) -> Result<LatestQuestionResponse> {
-        let mut questions = vec![];
-
-        let sql = format!(
-            "selec * from {} order by id desc limit $2",
-            QuestionEntity::table_name()
-        );
-        questions = sqlx::query_as::<_, QuestionEntity>(sqlx::AssertSqlSafe(&*sql))
-            .bind(last_id as i64)
-            .bind(limit as i64)
-            .fetch_all(&self.pg)
-            .await?;
+        let limit = i64::try_from(limit).context("question limit exceeds PostgreSQL bigint")?;
+        let questions = if last_id == 0 {
+            let sql = format!(
+                "select * from {} order by id desc limit $1",
+                QuestionEntity::table_name()
+            );
+            sqlx::query_as::<_, QuestionEntity>(sqlx::AssertSqlSafe(sql))
+                .bind(limit)
+                .fetch_all(&self.pg)
+                .await?
+        } else {
+            let last_id =
+                i64::try_from(last_id).context("question cursor exceeds PostgreSQL bigint")?;
+            let sql = format!(
+                "select * from {} where id < $1 order by id desc limit $2",
+                QuestionEntity::table_name()
+            );
+            sqlx::query_as::<_, QuestionEntity>(sqlx::AssertSqlSafe(sql))
+                .bind(last_id)
+                .bind(limit)
+                .fetch_all(&self.pg)
+                .await?
+        };
 
         let last_id = questions.last().map(|q| q.id);
-        let is_end = questions.len() < limit as usize;
+        let limit = usize::try_from(limit).context("question limit exceeds platform capacity")?;
+        let is_end = questions.len() < limit;
         Ok(LatestQuestionResponse {
             questions,
-            last_id: last_id,
+            last_id,
             is_end,
         })
     }
@@ -227,17 +242,16 @@ impl QuestionRepository for QuestionRepositoryImpl {
     //read_count with redis
     async fn incr(&self, target_id: u64, target_type: String) -> Result<u64> {
         let hash_key = self.get_hash_key(target_type.clone());
-        let increment;
-        match &self.redis {
+        let increment = match &self.redis {
             RedisPool::Single(pool) => {
                 let mut conn = pool.get()?;
-                increment = conn.hincr(hash_key, target_id.to_string(), 1)?;
+                conn.hincr(hash_key, target_id.to_string(), 1)?
             }
             RedisPool::Cluster(pool) => {
                 let mut conn = pool.get()?;
-                increment = conn.hincr(hash_key, target_id.to_string(), 1)?;
+                conn.hincr(hash_key, target_id.to_string(), 1)?
             }
-        }
+        };
         info!(
             "incr target_id:{}, target_type:{}, read_count:{} ",
             target_id, target_type, increment

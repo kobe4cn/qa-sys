@@ -1,5 +1,6 @@
-use crate::{LatestQuestionResponse, domain::entity::QuestionEntity};
 use anyhow::Result;
+
+use crate::{LatestQuestionResponse, domain::entity::QuestionEntity};
 
 #[async_trait::async_trait]
 pub trait QuestionRepository: Send + Sync + 'static {
@@ -10,7 +11,7 @@ pub trait QuestionRepository: Send + Sync + 'static {
     async fn find_latest(&self, last_id: u64, limit: u64) -> Result<LatestQuestionResponse>;
 
     //read_count with redis
-    async fn incr(&self, target_id: u64,target_type: String) -> Result<u64>;
+    async fn incr(&self, target_id: u64, target_type: String) -> Result<u64>;
 
     //read_count with pgsql
     async fn handler(&self, target_type: String) -> Result<()>;

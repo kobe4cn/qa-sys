@@ -1,4 +1,4 @@
-/**
+/*
 * pgsql_conf:
  dsn: "postgresql://postgres:postgres@127.0.0.1:5432/qa_sys" # dsn连接句柄信息
  max_connections: 100 # 最大连接数
