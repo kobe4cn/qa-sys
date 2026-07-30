@@ -130,6 +130,22 @@ for name in \
 done
 endef
 
+define validate_local_credential
+@value="$${$(1)}"; \
+byte_count=$$(LC_ALL=C printf '%s' "$$value" | wc -c | tr -d '[:space:]'); \
+if [ "$$byte_count" -gt 128 ]; then \
+	echo "$(1) must not exceed 128 bytes"; \
+	exit 1; \
+fi; \
+case "$$value" in \
+	*[!A-Za-z0-9._~@%+=,:/]*) \
+		echo "$(1) contains unsupported characters"; \
+		echo "Allowed characters: A-Z a-z 0-9 . _ ~ @ % + = , : /"; \
+		exit 1; \
+		;; \
+esac
+endef
+
 check-local-credentials:
 	@test -n "$$POSTGRES_PASSWORD" || { \
 		echo "POSTGRES_PASSWORD must be set in the environment"; \
@@ -139,6 +155,8 @@ check-local-credentials:
 		echo "REDIS_PASSWORD must be set in the environment"; \
 		exit 1; \
 	}
+	$(call validate_local_credential,POSTGRES_PASSWORD)
+	$(call validate_local_credential,REDIS_PASSWORD)
 
 check-apple-container:
 	@command -v container >/dev/null 2>&1 || { \

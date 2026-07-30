@@ -60,6 +60,9 @@ export POSTGRES_PASSWORD=postgres
 export REDIS_PASSWORD=redis
 ```
 
+密码必须为 1–128 字节，只能包含 ASCII 字母、数字和
+`. _ ~ @ % + = , : /`。不符合约束时 Make 目标会在创建容器前拒绝执行。
+
 ## 快速开始：Apple `container`
 
 Apple `container` 只支持 Apple Silicon。安装方法和受支持的 macOS 版本以
