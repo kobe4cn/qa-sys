@@ -5,7 +5,7 @@ graceful_wait_time: 3 # 平滑退出等待时间，单位s
 pgsql_conf:
   dsn: "postgresql://postgres:postgres@127.0.0.1:5432/qa_sys" # dsn连接句柄信息
   max_connections: 100 # 最大连接数
-  min_connections: 10  # 最小连接数
+  min_connections: 1   # 最小连接数
   max_lifetime: 1800  # 连接池默认生命周期，单位s
   idle_timeout: 300   # 空闲连接生命周期超时，单位s
   connect_timeout: 10 # 连接超时时间，单位s
