@@ -15,6 +15,11 @@ PULSAR_HTTP_PORT ?= 8080
 DEPS_WAIT_ATTEMPTS ?= 60
 DEPS_WAIT_INTERVAL ?= 1
 
+POSTGRES_USER ?= postgres
+POSTGRES_PASSWORD ?= postgres
+POSTGRES_DATABASE ?= qa_sys
+REDIS_PASSWORD ?= redis
+
 POSTGRES_CONTAINER := $(DEV_PREFIX)-postgres
 REDIS_CONTAINER := $(DEV_PREFIX)-redis
 PULSAR_CONTAINER := $(DEV_PREFIX)-pulsar
@@ -24,6 +29,107 @@ REDIS_VOLUME := $(DEV_PREFIX)-redis-data
 PULSAR_DATA_VOLUME := $(DEV_PREFIX)-pulsar-data
 PULSAR_LOG_VOLUME := $(DEV_PREFIX)-pulsar-logs
 
+define remove_containers
+@set -e; \
+for name in \
+	"$(POSTGRES_CONTAINER)" \
+	"$(REDIS_CONTAINER)" \
+	"$(PULSAR_CONTAINER)"; do \
+	if $(1) inspect "$$name" >/dev/null 2>&1; then \
+		$(1) rm --force "$$name" >/dev/null; \
+	fi; \
+done
+endef
+
+define ensure_volume
+@$(1) volume inspect "$(2)" >/dev/null 2>&1 || \
+	$(1) volume create "$(2)" >/dev/null
+endef
+
+define run_postgres
+@$(1) run -d --name "$(POSTGRES_CONTAINER)" \
+	-p "$(POSTGRES_PORT):5432" \
+	-e POSTGRES_USER="$(POSTGRES_USER)" \
+	-e POSTGRES_PASSWORD="$(POSTGRES_PASSWORD)" \
+	-e POSTGRES_DB="$(POSTGRES_DATABASE)" \
+	-v "$(POSTGRES_VOLUME):/var/lib/postgresql" \
+	"$(POSTGRES_IMAGE)"
+endef
+
+define run_redis
+@$(1) run -d --name "$(REDIS_CONTAINER)" \
+	$(2) \
+	-p "$(REDIS_PORT):6379" \
+	-v "$(REDIS_VOLUME):/data" \
+	"$(REDIS_IMAGE)" \
+	$(3) --appendonly yes --requirepass "$(REDIS_PASSWORD)"
+endef
+
+define run_pulsar
+@$(1) run -d --name "$(PULSAR_CONTAINER)" \
+	--user 0:0 \
+	$(2) \
+	-e "PULSAR_MEM=-Xms512m -Xmx512m -XX:MaxDirectMemorySize=256m" \
+	-p "$(PULSAR_PORT):6650" \
+	-p "$(PULSAR_HTTP_PORT):8080" \
+	-v "$(PULSAR_DATA_VOLUME):/pulsar/data" \
+	-v "$(PULSAR_LOG_VOLUME):/pulsar/logs" \
+	"$(PULSAR_IMAGE)" \
+	bin/pulsar standalone
+endef
+
+define wait_for_dependency
+@$(1) inspect "$(2)" >/dev/null 2>&1 || { \
+	echo "$(4) container $(2) was not found"; \
+	exit 1; \
+}
+@attempt=1; \
+until $(1) exec "$(2)" $(3) >/dev/null 2>&1; do \
+	if [ "$$attempt" -ge "$(DEPS_WAIT_ATTEMPTS)" ]; then \
+		echo "$(4) did not become ready after $(DEPS_WAIT_ATTEMPTS) attempts"; \
+		exit 1; \
+	fi; \
+	attempt=$$((attempt + 1)); \
+	sleep "$(DEPS_WAIT_INTERVAL)"; \
+done
+@echo "$(4) is ready"
+endef
+
+define migrate_database
+@table_count=$$($(1) exec "$(POSTGRES_CONTAINER)" \
+	psql -U "$(POSTGRES_USER)" -d "$(POSTGRES_DATABASE)" -Atq -c \
+	"SELECT count(*) FROM information_schema.tables WHERE table_schema = 'public' AND table_name IN ('questions', 'answers', 'users', 'users_votes');"); \
+case "$$table_count" in \
+	0) \
+		echo "Applying database migration"; \
+		$(1) exec -i "$(POSTGRES_CONTAINER)" \
+			psql -U "$(POSTGRES_USER)" -d "$(POSTGRES_DATABASE)" \
+			--set ON_ERROR_STOP=1 < "$(MIGRATION_PATH)"; \
+		;; \
+	4) \
+		echo "Database migration is already applied"; \
+		;; \
+	*) \
+		echo "Unexpected or partial database migration state: found $$table_count of 4 core tables"; \
+		echo "Inspect the database or run make $(2) to recreate local data"; \
+		exit 1; \
+		;; \
+esac
+endef
+
+define remove_volumes
+@set -e; \
+for name in \
+	"$(POSTGRES_VOLUME)" \
+	"$(REDIS_VOLUME)" \
+	"$(PULSAR_DATA_VOLUME)" \
+	"$(PULSAR_LOG_VOLUME)"; do \
+	if $(1) volume inspect "$$name" >/dev/null 2>&1; then \
+		$(1) volume $(2) "$$name" >/dev/null; \
+	fi; \
+done
+endef
+
 check-apple-container:
 	@command -v container >/dev/null 2>&1 || { \
 		echo "Apple container CLI is not installed"; \
@@ -32,139 +138,29 @@ check-apple-container:
 	@container system status >/dev/null
 
 deps-up-apple: check-apple-container
-	@set -e; \
-	for name in \
-		"$(POSTGRES_CONTAINER)" \
-		"$(REDIS_CONTAINER)" \
-		"$(PULSAR_CONTAINER)"; do \
-		if container inspect "$$name" >/dev/null 2>&1; then \
-			container delete --force "$$name" >/dev/null; \
-		fi; \
-	done
-	@container volume inspect "$(POSTGRES_VOLUME)" >/dev/null 2>&1 || \
-		container volume create "$(POSTGRES_VOLUME)" >/dev/null
-	@container volume inspect "$(REDIS_VOLUME)" >/dev/null 2>&1 || \
-		container volume create "$(REDIS_VOLUME)" >/dev/null
-	@container volume inspect "$(PULSAR_DATA_VOLUME)" >/dev/null 2>&1 || \
-		container volume create "$(PULSAR_DATA_VOLUME)" >/dev/null
-	@container volume inspect "$(PULSAR_LOG_VOLUME)" >/dev/null 2>&1 || \
-		container volume create "$(PULSAR_LOG_VOLUME)" >/dev/null
-	@container run -d --name "$(POSTGRES_CONTAINER)" \
-		-p "$(POSTGRES_PORT):5432" \
-		-e POSTGRES_USER=postgres \
-		-e POSTGRES_PASSWORD=postgres \
-		-e POSTGRES_DB=qa_sys \
-		-v "$(POSTGRES_VOLUME):/var/lib/postgresql" \
-		"$(POSTGRES_IMAGE)"
-	@container run -d --name "$(REDIS_CONTAINER)" \
-		--user 0:0 \
-		--entrypoint redis-server \
-		-p "$(REDIS_PORT):6379" \
-		-v "$(REDIS_VOLUME):/data" \
-		"$(REDIS_IMAGE)" \
-		--appendonly yes --requirepass redis
-	@container run -d --name "$(PULSAR_CONTAINER)" \
-		--user 0:0 \
-		--memory 2g \
-		-e "PULSAR_MEM=-Xms512m -Xmx512m -XX:MaxDirectMemorySize=256m" \
-		-p "$(PULSAR_PORT):6650" \
-		-p "$(PULSAR_HTTP_PORT):8080" \
-		-v "$(PULSAR_DATA_VOLUME):/pulsar/data" \
-		-v "$(PULSAR_LOG_VOLUME):/pulsar/logs" \
-		"$(PULSAR_IMAGE)" \
-		bin/pulsar standalone
+	$(call remove_containers,container)
+	$(call ensure_volume,container,$(POSTGRES_VOLUME))
+	$(call ensure_volume,container,$(REDIS_VOLUME))
+	$(call ensure_volume,container,$(PULSAR_DATA_VOLUME))
+	$(call ensure_volume,container,$(PULSAR_LOG_VOLUME))
+	$(call run_postgres,container)
+	$(call run_redis,container,--user 0:0 --entrypoint redis-server,)
+	$(call run_pulsar,container,--memory 2g)
 
 deps-status-apple: check-apple-container
-	@container inspect "$(POSTGRES_CONTAINER)" >/dev/null 2>&1 || { \
-		echo "PostgreSQL container $(POSTGRES_CONTAINER) was not found"; \
-		exit 1; \
-	}
-	@attempt=1; \
-	until container exec "$(POSTGRES_CONTAINER)" \
-		pg_isready -U postgres -d qa_sys >/dev/null 2>&1; do \
-		if [ "$$attempt" -ge "$(DEPS_WAIT_ATTEMPTS)" ]; then \
-			echo "PostgreSQL did not become ready after $(DEPS_WAIT_ATTEMPTS) attempts"; \
-			exit 1; \
-		fi; \
-		attempt=$$((attempt + 1)); \
-		sleep "$(DEPS_WAIT_INTERVAL)"; \
-	done
-	@echo "PostgreSQL is ready"
-	@container inspect "$(REDIS_CONTAINER)" >/dev/null 2>&1 || { \
-		echo "Redis container $(REDIS_CONTAINER) was not found"; \
-		exit 1; \
-	}
-	@attempt=1; \
-	until container exec "$(REDIS_CONTAINER)" \
-		redis-cli -a redis --no-auth-warning ping >/dev/null 2>&1; do \
-		if [ "$$attempt" -ge "$(DEPS_WAIT_ATTEMPTS)" ]; then \
-			echo "Redis did not become ready after $(DEPS_WAIT_ATTEMPTS) attempts"; \
-			exit 1; \
-		fi; \
-		attempt=$$((attempt + 1)); \
-		sleep "$(DEPS_WAIT_INTERVAL)"; \
-	done
-	@echo "Redis is ready"
-	@container inspect "$(PULSAR_CONTAINER)" >/dev/null 2>&1 || { \
-		echo "Pulsar container $(PULSAR_CONTAINER) was not found"; \
-		exit 1; \
-	}
-	@attempt=1; \
-	until container exec "$(PULSAR_CONTAINER)" \
-		bin/pulsar-admin clusters list >/dev/null 2>&1; do \
-		if [ "$$attempt" -ge "$(DEPS_WAIT_ATTEMPTS)" ]; then \
-			echo "Pulsar did not become ready after $(DEPS_WAIT_ATTEMPTS) attempts"; \
-			exit 1; \
-		fi; \
-		attempt=$$((attempt + 1)); \
-		sleep "$(DEPS_WAIT_INTERVAL)"; \
-	done
-	@echo "Pulsar is ready"
+	$(call wait_for_dependency,container,$(POSTGRES_CONTAINER),pg_isready -U "$(POSTGRES_USER)" -d "$(POSTGRES_DATABASE)",PostgreSQL)
+	$(call wait_for_dependency,container,$(REDIS_CONTAINER),redis-cli -a "$(REDIS_PASSWORD)" --no-auth-warning ping,Redis)
+	$(call wait_for_dependency,container,$(PULSAR_CONTAINER),bin/pulsar-admin clusters list,Pulsar)
 
 db-migrate-apple: deps-status-apple
-	@table_count=$$(container exec "$(POSTGRES_CONTAINER)" \
-		psql -U postgres -d qa_sys -Atq -c \
-		"SELECT count(*) FROM information_schema.tables WHERE table_schema = 'public' AND table_name IN ('questions', 'answers', 'users', 'users_votes');"); \
-	case "$$table_count" in \
-		0) \
-			echo "Applying database migration"; \
-			container exec -i "$(POSTGRES_CONTAINER)" \
-				psql -U postgres -d qa_sys --set ON_ERROR_STOP=1 \
-				< "$(MIGRATION_PATH)"; \
-			;; \
-		4) \
-			echo "Database migration is already applied"; \
-			;; \
-		*) \
-			echo "Unexpected or partial database migration state: found $$table_count of 4 core tables"; \
-			echo "Inspect the database or run make deps-reset-apple to recreate local data"; \
-			exit 1; \
-			;; \
-	esac
+	$(call migrate_database,container,deps-reset-apple)
 
 deps-down-apple: check-apple-container
-	@set -e; \
-	for name in \
-		"$(POSTGRES_CONTAINER)" \
-		"$(REDIS_CONTAINER)" \
-		"$(PULSAR_CONTAINER)"; do \
-		if container inspect "$$name" >/dev/null 2>&1; then \
-			container delete --force "$$name" >/dev/null; \
-		fi; \
-	done
+	$(call remove_containers,container)
 
 deps-reset-apple: deps-down-apple
 	@echo "Deleting Apple container volumes for $(DEV_PREFIX) and all data stored in them"
-	@set -e; \
-	for name in \
-		"$(POSTGRES_VOLUME)" \
-		"$(REDIS_VOLUME)" \
-		"$(PULSAR_DATA_VOLUME)" \
-		"$(PULSAR_LOG_VOLUME)"; do \
-		if container volume inspect "$$name" >/dev/null 2>&1; then \
-			container volume delete "$$name" >/dev/null; \
-		fi; \
-	done
+	$(call remove_volumes,container,delete)
 
 check-podman:
 	@command -v podman >/dev/null 2>&1 || { \
@@ -174,136 +170,29 @@ check-podman:
 	@podman info >/dev/null
 
 deps-up-podman: check-podman
-	@set -e; \
-	for name in \
-		"$(POSTGRES_CONTAINER)" \
-		"$(REDIS_CONTAINER)" \
-		"$(PULSAR_CONTAINER)"; do \
-		if podman container exists "$$name"; then \
-			podman rm --force "$$name" >/dev/null; \
-		fi; \
-	done
-	@podman volume exists "$(POSTGRES_VOLUME)" || \
-		podman volume create "$(POSTGRES_VOLUME)" >/dev/null
-	@podman volume exists "$(REDIS_VOLUME)" || \
-		podman volume create "$(REDIS_VOLUME)" >/dev/null
-	@podman volume exists "$(PULSAR_DATA_VOLUME)" || \
-		podman volume create "$(PULSAR_DATA_VOLUME)" >/dev/null
-	@podman volume exists "$(PULSAR_LOG_VOLUME)" || \
-		podman volume create "$(PULSAR_LOG_VOLUME)" >/dev/null
-	@podman run -d --name "$(POSTGRES_CONTAINER)" \
-		-p "$(POSTGRES_PORT):5432" \
-		-e POSTGRES_USER=postgres \
-		-e POSTGRES_PASSWORD=postgres \
-		-e POSTGRES_DB=qa_sys \
-		-v "$(POSTGRES_VOLUME):/var/lib/postgresql" \
-		"$(POSTGRES_IMAGE)"
-	@podman run -d --name "$(REDIS_CONTAINER)" \
-		-p "$(REDIS_PORT):6379" \
-		-v "$(REDIS_VOLUME):/data" \
-		"$(REDIS_IMAGE)" \
-		redis-server --appendonly yes --requirepass redis
-	@podman run -d --name "$(PULSAR_CONTAINER)" \
-		--user 0:0 \
-		-e "PULSAR_MEM=-Xms512m -Xmx512m -XX:MaxDirectMemorySize=256m" \
-		-p "$(PULSAR_PORT):6650" \
-		-p "$(PULSAR_HTTP_PORT):8080" \
-		-v "$(PULSAR_DATA_VOLUME):/pulsar/data" \
-		-v "$(PULSAR_LOG_VOLUME):/pulsar/logs" \
-		"$(PULSAR_IMAGE)" \
-		bin/pulsar standalone
+	$(call remove_containers,podman)
+	$(call ensure_volume,podman,$(POSTGRES_VOLUME))
+	$(call ensure_volume,podman,$(REDIS_VOLUME))
+	$(call ensure_volume,podman,$(PULSAR_DATA_VOLUME))
+	$(call ensure_volume,podman,$(PULSAR_LOG_VOLUME))
+	$(call run_postgres,podman)
+	$(call run_redis,podman,,redis-server)
+	$(call run_pulsar,podman,)
 
 deps-status-podman: check-podman
-	@podman container exists "$(POSTGRES_CONTAINER)" || { \
-		echo "PostgreSQL container $(POSTGRES_CONTAINER) was not found"; \
-		exit 1; \
-	}
-	@attempt=1; \
-	until podman exec "$(POSTGRES_CONTAINER)" \
-		pg_isready -U postgres -d qa_sys >/dev/null 2>&1; do \
-		if [ "$$attempt" -ge "$(DEPS_WAIT_ATTEMPTS)" ]; then \
-			echo "PostgreSQL did not become ready after $(DEPS_WAIT_ATTEMPTS) attempts"; \
-			exit 1; \
-		fi; \
-		attempt=$$((attempt + 1)); \
-		sleep "$(DEPS_WAIT_INTERVAL)"; \
-	done
-	@echo "PostgreSQL is ready"
-	@podman container exists "$(REDIS_CONTAINER)" || { \
-		echo "Redis container $(REDIS_CONTAINER) was not found"; \
-		exit 1; \
-	}
-	@attempt=1; \
-	until podman exec "$(REDIS_CONTAINER)" \
-		redis-cli -a redis --no-auth-warning ping >/dev/null 2>&1; do \
-		if [ "$$attempt" -ge "$(DEPS_WAIT_ATTEMPTS)" ]; then \
-			echo "Redis did not become ready after $(DEPS_WAIT_ATTEMPTS) attempts"; \
-			exit 1; \
-		fi; \
-		attempt=$$((attempt + 1)); \
-		sleep "$(DEPS_WAIT_INTERVAL)"; \
-	done
-	@echo "Redis is ready"
-	@podman container exists "$(PULSAR_CONTAINER)" || { \
-		echo "Pulsar container $(PULSAR_CONTAINER) was not found"; \
-		exit 1; \
-	}
-	@attempt=1; \
-	until podman exec "$(PULSAR_CONTAINER)" \
-		bin/pulsar-admin clusters list >/dev/null 2>&1; do \
-		if [ "$$attempt" -ge "$(DEPS_WAIT_ATTEMPTS)" ]; then \
-			echo "Pulsar did not become ready after $(DEPS_WAIT_ATTEMPTS) attempts"; \
-			exit 1; \
-		fi; \
-		attempt=$$((attempt + 1)); \
-		sleep "$(DEPS_WAIT_INTERVAL)"; \
-	done
-	@echo "Pulsar is ready"
+	$(call wait_for_dependency,podman,$(POSTGRES_CONTAINER),pg_isready -U "$(POSTGRES_USER)" -d "$(POSTGRES_DATABASE)",PostgreSQL)
+	$(call wait_for_dependency,podman,$(REDIS_CONTAINER),redis-cli -a "$(REDIS_PASSWORD)" --no-auth-warning ping,Redis)
+	$(call wait_for_dependency,podman,$(PULSAR_CONTAINER),bin/pulsar-admin clusters list,Pulsar)
 
 db-migrate-podman: deps-status-podman
-	@table_count=$$(podman exec "$(POSTGRES_CONTAINER)" \
-		psql -U postgres -d qa_sys -Atq -c \
-		"SELECT count(*) FROM information_schema.tables WHERE table_schema = 'public' AND table_name IN ('questions', 'answers', 'users', 'users_votes');"); \
-	case "$$table_count" in \
-		0) \
-			echo "Applying database migration"; \
-			podman exec -i "$(POSTGRES_CONTAINER)" \
-				psql -U postgres -d qa_sys --set ON_ERROR_STOP=1 \
-				< "$(MIGRATION_PATH)"; \
-			;; \
-		4) \
-			echo "Database migration is already applied"; \
-			;; \
-		*) \
-			echo "Unexpected or partial database migration state: found $$table_count of 4 core tables"; \
-			echo "Inspect the database or run make deps-reset-podman to recreate local data"; \
-			exit 1; \
-			;; \
-	esac
+	$(call migrate_database,podman,deps-reset-podman)
 
 deps-down-podman: check-podman
-	@set -e; \
-	for name in \
-		"$(POSTGRES_CONTAINER)" \
-		"$(REDIS_CONTAINER)" \
-		"$(PULSAR_CONTAINER)"; do \
-		if podman container exists "$$name"; then \
-			podman rm --force "$$name" >/dev/null; \
-		fi; \
-	done
+	$(call remove_containers,podman)
 
 deps-reset-podman: deps-down-podman
 	@echo "Deleting Podman volumes for $(DEV_PREFIX) and all data stored in them"
-	@set -e; \
-	for name in \
-		"$(POSTGRES_VOLUME)" \
-		"$(REDIS_VOLUME)" \
-		"$(PULSAR_DATA_VOLUME)" \
-		"$(PULSAR_LOG_VOLUME)"; do \
-		if podman volume exists "$$name"; then \
-			podman volume rm "$$name" >/dev/null; \
-		fi; \
-	done
+	$(call remove_volumes,podman,rm)
 
 run-service:
 	@APP_CONFIG="$(APP_CONFIG_PATH)" cargo run -p qa-svc
@@ -314,7 +203,8 @@ run-gateway:
 build:
 	@cargo build
 
-test: test-all
+test:
+	@cargo nextest run --all-features
 
 test-unit:
 	@cargo test -p qa-sys-core

@@ -55,7 +55,7 @@ Cargo 命令时 `rustup` 会按需安装。
 ## 快速开始：Apple `container`
 
 Apple `container` 只支持 Apple Silicon。安装方法和受支持的 macOS 版本以
-[官方文档](https://github.com/apple/container/blob/main/docs/README.md) 为准。
+[官方安装说明](https://github.com/apple/container#initial-install) 为准。
 
 先启动 `container` 系统服务：
 
@@ -232,6 +232,10 @@ make deps-up-apple \
 
 - PostgreSQL：用户 `postgres`，密码 `postgres`，数据库 `qa_sys`；
 - Redis：密码 `redis`。
+
+这些非秘密 sample 值可通过 `POSTGRES_USER`、`POSTGRES_PASSWORD`、
+`POSTGRES_DATABASE` 和 `REDIS_PASSWORD` Make 变量覆盖。覆盖后也要同步更新
+`app.yaml` 中的连接地址。
 
 ## 测试
 
