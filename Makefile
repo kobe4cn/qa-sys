@@ -16,9 +16,7 @@ DEPS_WAIT_ATTEMPTS ?= 60
 DEPS_WAIT_INTERVAL ?= 1
 
 POSTGRES_USER ?= postgres
-POSTGRES_PASSWORD ?= postgres
 POSTGRES_DATABASE ?= qa_sys
-REDIS_PASSWORD ?= redis
 
 POSTGRES_CONTAINER := $(DEV_PREFIX)-postgres
 REDIS_CONTAINER := $(DEV_PREFIX)-redis
@@ -130,6 +128,16 @@ for name in \
 done
 endef
 
+check-local-credentials:
+	@test -n "$(POSTGRES_PASSWORD)" || { \
+		echo "POSTGRES_PASSWORD must be set in the environment"; \
+		exit 1; \
+	}
+	@test -n "$(REDIS_PASSWORD)" || { \
+		echo "REDIS_PASSWORD must be set in the environment"; \
+		exit 1; \
+	}
+
 check-apple-container:
 	@command -v container >/dev/null 2>&1 || { \
 		echo "Apple container CLI is not installed"; \
@@ -137,7 +145,7 @@ check-apple-container:
 	}
 	@container system status >/dev/null
 
-deps-up-apple: check-apple-container
+deps-up-apple: check-local-credentials check-apple-container
 	$(call remove_containers,container)
 	$(call ensure_volume,container,$(POSTGRES_VOLUME))
 	$(call ensure_volume,container,$(REDIS_VOLUME))
@@ -147,7 +155,7 @@ deps-up-apple: check-apple-container
 	$(call run_redis,container,--user 0:0 --entrypoint redis-server,)
 	$(call run_pulsar,container,--memory 2g)
 
-deps-status-apple: check-apple-container
+deps-status-apple: check-local-credentials check-apple-container
 	$(call wait_for_dependency,container,$(POSTGRES_CONTAINER),pg_isready -U "$(POSTGRES_USER)" -d "$(POSTGRES_DATABASE)",PostgreSQL)
 	$(call wait_for_dependency,container,$(REDIS_CONTAINER),redis-cli -a "$(REDIS_PASSWORD)" --no-auth-warning ping,Redis)
 	$(call wait_for_dependency,container,$(PULSAR_CONTAINER),bin/pulsar-admin clusters list,Pulsar)
@@ -169,7 +177,7 @@ check-podman:
 	}
 	@podman info >/dev/null
 
-deps-up-podman: check-podman
+deps-up-podman: check-local-credentials check-podman
 	$(call remove_containers,podman)
 	$(call ensure_volume,podman,$(POSTGRES_VOLUME))
 	$(call ensure_volume,podman,$(REDIS_VOLUME))
@@ -179,7 +187,7 @@ deps-up-podman: check-podman
 	$(call run_redis,podman,,redis-server)
 	$(call run_pulsar,podman,)
 
-deps-status-podman: check-podman
+deps-status-podman: check-local-credentials check-podman
 	$(call wait_for_dependency,podman,$(POSTGRES_CONTAINER),pg_isready -U "$(POSTGRES_USER)" -d "$(POSTGRES_DATABASE)",PostgreSQL)
 	$(call wait_for_dependency,podman,$(REDIS_CONTAINER),redis-cli -a "$(REDIS_PASSWORD)" --no-auth-warning ping,Redis)
 	$(call wait_for_dependency,podman,$(PULSAR_CONTAINER),bin/pulsar-admin clusters list,Pulsar)
@@ -270,7 +278,7 @@ release:
 update-submodule:
 	@git submodule update --init --recursive --remote
 
-.PHONY: check-apple-container deps-up-apple deps-status-apple db-migrate-apple \
+.PHONY: check-local-credentials check-apple-container deps-up-apple deps-status-apple db-migrate-apple \
 	deps-down-apple deps-reset-apple check-podman deps-up-podman \
 	deps-status-podman db-migrate-podman deps-down-podman \
 	deps-reset-podman run-service run-gateway \

@@ -52,6 +52,14 @@ Cargo 命令时 `rustup` 会按需安装。
 | Redis | `redis:8.8.1-alpine` |
 | Pulsar | `apachepulsar/pulsar:4.2.3` |
 
+容器密码只从环境变量读取，不在 Makefile 中提供默认值。以下是与示例
+`app.yaml` 一致的本地学习凭据；如需覆盖，也要同步更新 `app.yaml` 中的连接地址：
+
+```bash
+export POSTGRES_PASSWORD=postgres
+export REDIS_PASSWORD=redis
+```
+
 ## 快速开始：Apple `container`
 
 Apple `container` 只支持 Apple Silicon。安装方法和受支持的 macOS 版本以
@@ -228,14 +236,13 @@ make deps-up-apple \
 | Pulsar | `6650` | `app.yaml` / Makefile | 消息协议 |
 | Pulsar admin | `8080` | Makefile | HTTP 管理接口 |
 
-默认本地凭据仅用于学习：
+示例本地凭据仅用于学习：
 
 - PostgreSQL：用户 `postgres`，密码 `postgres`，数据库 `qa_sys`；
 - Redis：密码 `redis`。
 
-这些非秘密 sample 值可通过 `POSTGRES_USER`、`POSTGRES_PASSWORD`、
-`POSTGRES_DATABASE` 和 `REDIS_PASSWORD` Make 变量覆盖。覆盖后也要同步更新
-`app.yaml` 中的连接地址。
+PostgreSQL 用户和数据库还可通过 `POSTGRES_USER`、`POSTGRES_DATABASE` Make
+变量覆盖。
 
 ## 测试
 
